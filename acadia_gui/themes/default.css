@@ -1,0 +1,43 @@
+QLabel#plotBackground {
+    background-color: #FFFFFF;
+    padding: 10px;
+    border: 1px solid #B0B0B0;
+    border-radius: 4px;
+}
+
+QStatusBar QLabel {
+    color: black;
+    font-weight: normal;
+}
+
+
+/*mpl background behind figure*/
+#livePlotCanvas {
+    background-color: #fafafa;
+}
+
+/* mpl tool widget */
+#livePlotToolBar {
+    background-color: transparent;
+}
+QToolButton {
+    background-color: #fafafa;
+    border: 1px solid #999999;
+    padding: 4px;
+    border-radius: 4px;
+}
+QToolButton:hover {
+    background-color: #dddddd;
+    border-radius: 4px;
+}
+QToolButton:pressed {
+    background-color: #888888;
+}
+QToolBar::separator {
+    background-color: #dddddd;
+    width: 1px;
+    margin: 4px;
+}
+
+
+

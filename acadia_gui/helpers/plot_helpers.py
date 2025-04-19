@@ -1,0 +1,113 @@
+import os
+from typing import Dict
+
+import pickle
+import numpy as np
+import matplotlib.pyplot as plt
+
+from acadia import Runtime
+
+PLOT_NAME_TAG = "plot_name"
+AXS_SHAPE_TAG = "axs_shape"
+DATA_PROCESS_TAG = "is_data_processor"
+
+
+def get_registered_plot_methods(runtime_obj)-> Dict[str, str]:
+    """
+    Get all registered plot methods from a runtime object,
+    return as a dict of {plot_name: plot_method_name}
+
+    Note: this returns the plot method name in a runtime class,
+    rather than the bounded method.
+    """
+    plots = {}
+    for attr in dir(runtime_obj):
+        method = getattr(runtime_obj, attr)
+        plot_name = getattr(method, PLOT_NAME_TAG, None)
+        if callable(method) and (plot_name is not None):
+            plots[plot_name] = attr
+    return plots
+
+def save_registered_plots(runtime:Runtime, save_pickle=True, do_process=True, transparent=True) -> None:
+    """
+    Do a final plot on all registered plot methods and save the figures.
+
+    :param runtime: Runtime class in which the plot methods were define.
+    :param save_pickle: If True, save a copy of the pickled plot
+    :param do_process: If True, rerun the data processing method tagged by `DATA_PROCESS_TAG=True`
+        before plotting the data
+    :param transparent: If True, save png with transparent background
+    :return:
+    """
+    if do_process:
+        data_process_method_name = get_data_process_method(runtime)
+        getattr(runtime, data_process_method_name)()
+    plots = get_registered_plot_methods(runtime)
+    for plot_name, method_name in plots.items():
+        figure, _ = getattr(runtime, method_name)()
+        # Save an image file
+        image_filename = os.path.join(runtime.local_directory, f"{plot_name}.png")
+        figure.savefig(image_filename, dpi=500, transparent=transparent)
+
+        # save pickled figure for interactive plot
+        if save_pickle:
+            with open(os.path.join(runtime.local_directory, f"{plot_name}.pkl"), "wb") as f:
+                pickle.dump(figure, f)
+
+
+def prepare_axes(axs, axs_shape=(1,1), **subplot_kwargs):
+    """
+    Prepare the figure and axes for plotting.
+
+    If `axs` is None, create a new subplot grid using `axs_shape`.
+    If `axs` is provided, attempt to extract the corresponding figure.
+
+
+    :param axs:
+    :param axs_shape: unfortunately, we still have to provide this even though we might
+        have already provided it in the decorator
+    :return:
+    """
+    if axs is None:
+        fig, axs = plt.subplots(*axs_shape, **subplot_kwargs)
+        return fig, axs
+
+    try:
+        fig = np.asarray(axs).flat[0].figure
+    except Exception:
+        fig = axs.figure
+    return fig, axs
+
+
+
+def get_data_process_method(runtime_obj)-> str:
+    """
+    Get the registered runtime method that processes the current data.
+    The data processing method should get all the necessary data ready for plotting,
+    and store in class attributes, and return the current completed iterations
+
+    The method is identified with the tag `DATA_PROCESS_TAG = True`
+
+    :param runtime_obj:
+    :return: Name of the data processing method
+    """
+    process_methods = []
+    for attr in dir(runtime_obj):
+        method = getattr(runtime_obj, attr)
+        is_data_processor = getattr(method, DATA_PROCESS_TAG, False)
+        if callable(method) and is_data_processor:
+            process_methods.append(attr)
+    if len(process_methods) > 1:
+        raise AttributeError(
+            f"Multiple data processor methods found: {process_methods}. "
+            f"Please define a single wrapper method that calls all necessary processors, "
+            f"and decorate with `@annotate_method({DATA_PROCESS_TAG}=True)`."
+        )
+    elif len(process_methods) == 0:
+        raise AttributeError(
+            f"No data processor method found in {runtime_obj}. "
+            f"Make sure one method is decorated with `@annotate_method({DATA_PROCESS_TAG}=True)`."
+        )
+
+    return process_methods[0]
+

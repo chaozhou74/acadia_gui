@@ -1,0 +1,10 @@
+test_spa:
+  instrument_class: qcodes_drivers.SignalCore_SC5510B.SignalCore_SC5510B
+  serial_number: "10003061"
+
+
+yoko2:
+  instrument_class: qcodes_drivers.Yokogawa_GS200_RSL.Yokogawa_GS200_RSL
+  address: "GPIB::23::INSTR"
+  ramp_slew: 0.08
+
