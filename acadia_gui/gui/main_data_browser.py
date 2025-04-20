@@ -5,12 +5,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt
 
-from acadia_gui.gui.log_view import LogViewer
-from acadia_gui.gui.instrument_parameter_view import InstrumentParamsViewer
-from acadia_gui.gui.yaml_view import YamlViewer
-from acadia_gui.gui.plot_view import FigureDisplayWidget
-from acadia_gui.gui.data_folder_view import FolderTreeWidget, is_datafolder
-from acadia_gui.gui.top_menubar import AppMenuBar
+from acadia_gui.gui import LogViewer, InstrumentParamsViewer, YamlViewer, FigureDisplayWidget, FolderTreeWidget, is_datafolder, AppMenuBar
 from acadia_gui import THEME_PATH
 
 
