@@ -1,7 +1,7 @@
 import os
 import pickle
 from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QLabel, QComboBox, QPushButton, QStackedLayout
+    QWidget, QVBoxLayout, QLabel, QComboBox, QPushButton, QStackedLayout, QHBoxLayout
 )
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtCore import Qt
@@ -33,16 +33,22 @@ class FigureDisplayWidget(QWidget):
 
         frame_layout.addWidget(self.image_label)
 
-
-
         self.load_pickle_button = QPushButton("Load pickle")
         self.load_pickle_button.clicked.connect(self.load_pickle)
+
+        self.switch_to_live_button = QPushButton("Live Mode")
+        self.switch_to_live_button.clicked.connect(self.plot_live_mode)
+
+        # Layout for buttons in one row
+        button_row = QHBoxLayout()
+        button_row.addWidget(self.load_pickle_button)
+        button_row.addWidget(self.switch_to_live_button)
 
         self.png_view = QWidget()
         png_layout = QVBoxLayout(self.png_view)
         png_layout.addWidget(self.figure_selector)
         png_layout.addWidget(self.image_frame)
-        png_layout.addWidget(self.load_pickle_button)
+        png_layout.addLayout(button_row)
 
         # Live plot widget
         self.live_plot = LivePlotWidget()
@@ -60,6 +66,7 @@ class FigureDisplayWidget(QWidget):
         self.png_paths = []
         self.folder_path = None
         self.load_pickle_button.setEnabled(False)
+        self.switch_to_live_button.setEnabled(False)
 
     def load_images(self, folder_path):
         self.folder_path = folder_path
@@ -70,17 +77,21 @@ class FigureDisplayWidget(QWidget):
         if self.png_paths:
             self.stack.setCurrentIndex(0)
             self.load_pickle_button.setEnabled(True)
+            self.switch_to_live_button.setEnabled(True)
             self.figure_selector.addItems([os.path.basename(f) for f in self.png_paths])
             self.show_selected_image(0)
             self.live_plot.stop()
         else:
+            self.plot_live_mode()
+
+    def plot_live_mode(self):
+        if self.folder_path:
+            self.load_pickle_button.setEnabled(False)
             try:
                 self.stack.setCurrentIndex(1)
-                self.load_pickle_button.setEnabled(False)
-                self.live_plot.start(folder_path)
+                self.live_plot.start(self.folder_path)
             except Exception as e:
                 self.stack.setCurrentIndex(0)
-                self.load_pickle_button.setEnabled(False)
                 self.image_label.setText(f"Failed to load live plot: {e}")
 
 
@@ -130,5 +141,6 @@ class FigureDisplayWidget(QWidget):
         self.figure_selector.clear()
         self.image_label.setText("Not a data folder (missing run.py)")
         self.load_pickle_button.setEnabled(False)
+        self.switch_to_live_button.setEnabled(False)
         self.live_plot.stop()
         self.stack.setCurrentIndex(0)

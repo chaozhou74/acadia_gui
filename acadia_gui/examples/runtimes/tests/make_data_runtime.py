@@ -84,6 +84,7 @@ class TestAmpSweepRuntime(QMsmtRuntime):
         if self.plot:
             save_registered_plots(self)
 
+
     @annotate_method(is_data_processor=True)
     def process_current_data(self):
         # First make sure that we actually have new data to process

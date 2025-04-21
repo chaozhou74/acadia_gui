@@ -1,0 +1,123 @@
+qb_stimulus:
+  channel: DAC0
+  channel_config:
+    vop: 30000
+    mix_reconstruction: true
+    nco_frequency: 8.12054954e+9
+  memories:
+    rotation:
+      length: 60e-9
+      fixed_length: 200e-9
+    rotation_2:
+      length: 60e-9
+      fixed_length: 200e-9
+    rotation_selective:
+      length: 4000e-9
+      fixed_length: 0.e+1
+    rotation_selective_2:
+      length: 60e-9
+      fixed_length: 900e-9
+  waveforms:
+    R_x_180:
+      data: hann
+      scale: 0.5234
+    R_x_180_selective:
+      data: hann
+      scale: 0.0599
+    R_x_90:
+      data: hann
+      scale: 0.2617
+
+ro_stimulus:
+  channel: DAC2
+  channel_config:
+    vop: 25000
+    mix_reconstruction: true
+    nco_frequency: 8.97275e9
+  memories:
+    readout:
+      fixed_length: 1.5e-6
+      length: 320e-9
+    readout_pulse_long_memory:
+      fixed_length: 200e-9
+      length: 40e-9
+    readout_pulse_long_memory_alt:
+      fixed_length: 200e-9
+      length: 40e-9
+  waveforms:
+    readout:
+      data: hann
+      scale: (0.4, 0deg)
+    readout_pulse_long_shape:
+      data: hann
+      scale: (0.5, -45deg)
+    readout_pulse_long_shape_alt:
+      data: hann
+      scale: (0.3, 45deg)
+
+ro_capture:
+  channel: ADC0
+  channel_config:
+    nco_frequency: 8.97275e9
+  memories:
+    readout_trace:
+      length: 2.5e-6
+      decimation: 4
+      region: plddr
+    readout_trace_long:
+      length: 31e-6
+      decimation: 4
+      region: plddr
+    readout_accumulated:
+      length: 2.5e-6
+      decimation: 0
+      region: plddr
+  capture_delay: 320e-9
+  windows:
+    boxcar:
+      data: 0.1
+      offset: [0, 0]
+    matched:
+      data: 0.1
+      offset: [34, -473]
+  state_quadrants: [1, 2]
+
+
+qb_qm_bs_stimulus:
+  channel: DAC6 # DAC4 # for scope test
+  channel_config:
+    vop: 30000
+    mix_reconstruction: false
+    nco_frequency: 1.9167e9 # 2.9268e9 # 20e6 # for scope test
+  memories:
+    swap:
+      length: 60e-9
+      fixed_length: 160e-9
+    dChi_pump_memory:
+      length: 600e-9
+      fixed_length: 5e-6
+  waveforms:
+    swap:
+      data: hann
+      scale: 0.05
+    dChi_pump_waveform:
+      data: hann
+      scale: 0.05
+
+
+
+
+qb_linc_bs_stimulus:
+  channel: DAC3
+  channel_config:
+    vop: 29000
+    mix_reconstruction: false
+    nco_frequency: 1.352e9
+  memories:
+    swap:
+      length: 0
+      fixed_length: 80e-9
+  waveforms:
+    swap:
+      data: hann
+      scale: 0.1

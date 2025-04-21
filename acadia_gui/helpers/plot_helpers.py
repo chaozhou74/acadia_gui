@@ -32,9 +32,9 @@ def save_registered_plots(runtime:Runtime, save_pickle=True, do_process=True, tr
     """
     Do a final plot on all registered plot methods and save the figures.
 
-    :param runtime: Runtime class in which the plot methods were define.
+    :param runtime: Runtime object that has the registered plot methods.
     :param save_pickle: If True, save a copy of the pickled plot
-    :param do_process: If True, rerun the data processing method tagged by `DATA_PROCESS_TAG=True`
+    :param do_process: If True, re-run the data processing method tagged by `DATA_PROCESS_TAG=True`
         before plotting the data
     :param transparent: If True, save png with transparent background
     :return:
@@ -54,10 +54,12 @@ def save_registered_plots(runtime:Runtime, save_pickle=True, do_process=True, tr
             with open(os.path.join(runtime.local_directory, f"{plot_name}.pkl"), "wb") as f:
                 pickle.dump(figure, f)
 
+        plt.close(figure)
 
 def prepare_axes(axs, axs_shape=(1,1), **subplot_kwargs):
     """
-    Prepare the figure and axes for plotting.
+    Prepare the figure and axes for plotting. This is just a simple shortcut function that does
+    the things we would usually do in a plot method that takes optional plot axs.
 
     If `axs` is None, create a new subplot grid using `axs_shape`.
     If `axs` is provided, attempt to extract the corresponding figure.
