@@ -5,7 +5,9 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt
 
-from acadia_gui.gui import LogViewer, InstrumentParamsViewer, YamlViewer, FigureDisplayWidget, FolderTreeWidget, is_datafolder, AppMenuBar
+from acadia_gui.gui import (LogViewer, InstrumentParamsViewer, YamlViewer,
+                            FigureDisplayWidget, FolderTreeWidget, is_datafolder,
+                            AppMenuBar, KwargsJsonViewer)
 from acadia_gui import THEME_PATH
 
 
@@ -15,8 +17,11 @@ class RightPanelTabs(QTabWidget):
         self.config_yaml_tab = YamlViewer()
         self.instruments_tab = InstrumentParamsViewer(client_station)
         self.log_tab = LogViewer()
+        self.kwargs_json_tab = KwargsJsonViewer()
+
 
         self.addTab(self.config_yaml_tab, "Config YAMLs")
+        self.addTab(self.kwargs_json_tab, "Kwargs")
         self.addTab(self.instruments_tab, "Instruments")
         self.addTab(self.log_tab, "Logs")
 
@@ -24,6 +29,7 @@ class RightPanelTabs(QTabWidget):
         self.instruments_tab.load_json(folder_path)
         self.config_yaml_tab.load_yaml_files(folder_path)
         self.log_tab.load_logs(folder_path)
+        self.kwargs_json_tab.load_json(folder_path)  # You can call this after setting the folder
 
 
 class DataBrowser(QMainWindow):

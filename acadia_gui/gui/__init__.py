@@ -4,3 +4,4 @@ from .yaml_view import YamlViewer
 from .plot_view import FigureDisplayWidget
 from .data_folder_view import FolderTreeWidget, is_datafolder
 from .top_menubar import AppMenuBar
+from .kwargs_json_view import KwargsJsonViewer
