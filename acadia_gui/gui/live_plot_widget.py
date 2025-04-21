@@ -1,13 +1,17 @@
 import os
+import time
+import inspect
+from typing import get_type_hints, Literal, get_args
+from collections import defaultdict
+
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
-    QProgressBar, QLineEdit, QLabel, QComboBox
+    QProgressBar, QLineEdit, QLabel, QComboBox, QGroupBox, QGridLayout, QCheckBox, QSizePolicy
 )
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg, NavigationToolbar2QT
 from matplotlib.figure import Figure
 from PyQt5.QtCore import QTimer
 from PyQt5 import QtCore, QtGui
-import time
 
 from acadia_qmsmt.helpers import load_runtime_from_data_dir
 from acadia_gui import AXS_SHAPE_TAG
@@ -16,6 +20,25 @@ from acadia_gui.helpers import get_registered_plot_methods, get_data_process_met
 # files used for rough estimate of progress rate, ETA, etc
 UPDATE_INDICATOR_FILE = "metadata.txt" # file whose last modified time indicates the last data update
 CREATE_INDICATOR_FILE = "run.py" # file whose creation time indicates the experiment time
+
+
+
+def parse_inputs(input_dict):
+    kwargs = {}
+    for k, w in input_dict.items():
+        if isinstance(w, QCheckBox):
+            kwargs[k] = w.isChecked()
+        elif isinstance(w, QComboBox):
+            kwargs[k] = w.currentText()
+        elif isinstance(w, QLineEdit):
+            try:
+                val = eval(w.text())
+                kwargs[k] = val
+            except Exception:
+                kwargs[k] = w.text()
+        else:
+            kwargs[k] = w.text()  # fallback
+    return kwargs
 
 
 class LivePlotWidget(QWidget):
@@ -47,6 +70,11 @@ class LivePlotWidget(QWidget):
         self.toolbar = NavigationToolbar2QT(self.canvas, self)
         self.toolbar.setObjectName("livePlotToolBar")  # tags for styling with css
         self.canvas.setObjectName("livePlotCanvas")
+        self.canvas.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Expanding,
+        )
+        self.canvas.setMinimumHeight(200)  # optional safety
 
 
         # --- Plot selector ---
@@ -76,17 +104,36 @@ class LivePlotWidget(QWidget):
         self.progress_bar.setMinimum(0)
         self.progress_bar.setFormat("0/0")
 
+
+        # --- Input regions for kwargs ---
+        self.process_kwargs_box = QGroupBox("Process kwargs")
+        self.process_kwargs_box.setFlat(False)
+        self.process_kwargs_layout = QVBoxLayout()
+        self.process_kwargs_box.setLayout(self.process_kwargs_layout)
+
+        self.plot_kwargs_box = QGroupBox("Plot kwargs")
+        self.plot_kwargs_box.setFlat(False)
+        self.plot_kwargs_layout = QVBoxLayout()
+        self.plot_kwargs_box.setLayout(self.plot_kwargs_layout)
+
+        kwargs_row = QVBoxLayout()
+        kwargs_row.addWidget(self.process_kwargs_box)
+        kwargs_row.addWidget(self.plot_kwargs_box)
+
+
         # --- Layout setup ---
         layout = QVBoxLayout(self)
         layout.addWidget(self.toolbar)
-        layout.addWidget(self.canvas)
+        layout.addWidget(self.canvas, stretch=1)
         layout.addLayout(interval_row)
         layout.addWidget(self.progress_bar)
+        layout.insertLayout(layout.indexOf(self.progress_bar), kwargs_row)
         self.setLayout(layout)
 
         # --- Timer for update ---
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_plot)
+
 
     def start(self, data_path):
         self.data_path = data_path
@@ -107,10 +154,16 @@ class LivePlotWidget(QWidget):
             print(e)
             self.data_processor_name = None
 
+        if hasattr(self.rt, self.data_processor_name):
+            processor_func = getattr(self.rt, self.data_processor_name)
+            self.process_inputs = self.create_inputs_from_signature(processor_func, self.process_kwargs_layout,
+                                                                    self.process_kwargs_box)
+
+
         # Set default plot
         self.current_plot_name = self.plot_selector.currentText()
         self.ready = True  # safe to allow plotting now
-        self.update_plot(force=True)
+        self.select_plot(self.plot_selector.currentIndex())
         self.timer.start(self.poll_interval_ms)
 
 
@@ -125,6 +178,7 @@ class LivePlotWidget(QWidget):
         self.is_paused = not self.is_paused
         self.pause_button.setText("Resume Plot" if self.is_paused else "Pause Plot")
 
+
     def update_poll_interval(self):
         try:
             seconds = float(self.interval_input.text())
@@ -135,12 +189,14 @@ class LivePlotWidget(QWidget):
         except ValueError:
             self.interval_input.setText(str(self.poll_interval_ms / 1000))
 
+
     def get_latest_update_time(self):
         try:
             path = os.path.join(self.data_path, self.update_indicator_file)
             return os.path.getmtime(path)
         except Exception:
             return 0
+
 
     def get_creation_time(self):
         try:
@@ -149,9 +205,19 @@ class LivePlotWidget(QWidget):
         except Exception:
             return 0
 
+
     def select_plot(self, index):
         self.current_plot_name = self.plot_selector.itemText(index)
+
+        # Refresh plot input fields
+        method_name = self.plot_registry.get(self.current_plot_name)
+        if method_name and hasattr(self.rt, method_name):
+            plot_func = getattr(self.rt, method_name)
+            self.plot_inputs = self.create_inputs_from_signature(plot_func, self.plot_kwargs_layout,
+                                                                 self.plot_kwargs_box)
+
         self.update_plot(force=True)
+
 
     def update_plot(self, force=False):
         if not self.ready:
@@ -172,7 +238,8 @@ class LivePlotWidget(QWidget):
             completed_iter = None
             if hasattr(self.rt, self.data_processor_name):
                 processor_func = getattr(self.rt, self.data_processor_name)
-                completed_iter = processor_func() # todo: allows this to take some arguments
+                proc_kwargs = parse_inputs(self.process_inputs)
+                completed_iter = processor_func(**proc_kwargs)
             else:
                 self.progress_bar.setFormat(
                     f"Missing processor: {self.data_processor_name}"
@@ -185,12 +252,13 @@ class LivePlotWidget(QWidget):
                 return
 
             plot_method = getattr(self.rt, method_name)
+            plot_kwargs = parse_inputs(self.plot_inputs)
 
             # Clear and call plot into ax
             self.canvas.figure.clf()
             axs_shape = getattr(plot_method, AXS_SHAPE_TAG, (1, 1))
             axs = self.canvas.figure.subplots(*axs_shape)
-            plot_method(axs=axs)
+            plot_method(axs=axs, **plot_kwargs)
             self.canvas.draw()
 
             if completed_iter is not None:
@@ -206,6 +274,7 @@ class LivePlotWidget(QWidget):
         except Exception as e:
             self.progress_bar.setValue(0)
             self.progress_bar.setFormat(f"Error: {str(e)}")
+
 
     def _update_progress_bar(self, completed_iter):
         self.progress_bar.setValue(completed_iter)
@@ -238,7 +307,6 @@ class LivePlotWidget(QWidget):
         except Exception as e:
             self.progress_bar.setFormat(f"{completed_iter}/{self.total_iter} | ETA error: {e}")
 
-
     def set_theme(self, theme_name):
         from matplotlib import style as mpl_style
         from matplotlib import rcdefaults
@@ -255,6 +323,95 @@ class LivePlotWidget(QWidget):
         self.update_plot(force=True)
 
 
-    # todo: right-click options on images
-    # todo: plot function arguments
+    def add_kwarg_input(self, row_layout: QHBoxLayout, label: str, default="", annotation=None):
+        label_widget = QLabel(label)
+        widget = None
 
+        # input fields with type hint bool will show as check box
+        if annotation is bool:
+            widget = QCheckBox()
+            widget.setChecked(bool(default))
+            widget.stateChanged.connect(lambda: self.update_plot(force=True))
+
+        # input fields with type hint Literal will show as combobox (drop down menu)
+        elif hasattr(annotation, '__origin__') and annotation.__origin__ is Literal:
+            widget = QComboBox()
+            choices = get_args(annotation)
+            widget.addItems([str(c) for c in choices])
+            if default in choices:
+                widget.setCurrentText(str(default))
+            widget.currentIndexChanged.connect(lambda: self.update_plot(force=True))
+
+        else: # generic inputs
+            widget = QLineEdit()
+            widget.setText(str(default))
+
+            def handle_return():
+                try: # generic inputs will try to be evaluated
+                    val = eval(widget.text())
+                    widget.setText(str(val))
+                except Exception:
+                    pass
+                self.update_plot(force=True)
+
+            widget.returnPressed.connect(handle_return)
+
+        # Add label and widget side by side
+        row_layout.addWidget(label_widget)
+        row_layout.addWidget(widget)
+        return widget
+
+
+    def create_inputs_from_signature(self, func, layout: QVBoxLayout, group_box: QGroupBox):
+        # --- Clear old layout ---
+        def clear_layout(l):
+            while l.count():
+                item = l.takeAt(0)
+                if item.widget():
+                    item.widget().deleteLater()
+                elif item.layout():
+                    clear_layout(item.layout())
+
+        clear_layout(layout)
+
+        # --- Parse signature and type hints ---
+        sig = inspect.signature(func)
+        type_hints = get_type_hints(func)
+
+        widgets = {}
+        row_layout = QHBoxLayout()
+        items_in_row = 0
+        max_items_per_row = 4
+
+        for name, param in sig.parameters.items():
+            if name in {"self", "axs"}:
+                continue
+
+            default = param.default if param.default is not inspect.Parameter.empty else ""
+            annotation = type_hints.get(name, None)
+
+            # Add input pair
+            self.add_kwarg_input(row_layout, name, default, annotation)
+            widgets[name] = row_layout.itemAt(row_layout.count() - 1).widget()
+
+            # Add spacing between pairs
+            row_layout.addSpacing(20)
+
+            items_in_row += 1
+            if items_in_row >= max_items_per_row:
+                layout.addLayout(row_layout)
+                row_layout = QHBoxLayout()
+                items_in_row = 0
+
+        if items_in_row > 0:
+            layout.addLayout(row_layout)
+
+        group_box.setVisible(bool(widgets))
+        return widgets
+
+
+
+    # todo: right-click options on images
+
+    # fixme: add kwargs tab
+    # fixme: add update button.

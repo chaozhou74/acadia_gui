@@ -40,4 +40,17 @@ QToolBar::separator {
 }
 
 
+QGroupBox {
+    margin-top: 8px;
+    border: 1px solid lightgray;
+    border-radius: 4px;
+    padding-top: 5px;  /* space above the widgets, under the title */
+}
+
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    padding: 0 6px;
+    background-color: #f0f0f0;  /* optional: highlight title */
+}
 

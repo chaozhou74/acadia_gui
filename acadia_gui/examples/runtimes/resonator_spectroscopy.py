@@ -1,4 +1,4 @@
-from typing import Union
+from typing import Union, Literal
 
 import numpy as np
 from numpy.typing import NDArray
@@ -115,11 +115,12 @@ class ResonatorSpectroscopyRuntime(QMsmtRuntime):
 
 
     @annotate_method(plot_name="mag_phase_vs_dac", axs_shape=(2,1))
-    def plot_data_iq(self, axs=None, corrected:bool=True):
+    def plot_data_iq(self, axs=None, apply_e_delay:bool=True, test1=1, test2: Literal[1, 3, "asgadf"]=1, test3=100000, test4="111111111111111"):
         from acadia_gui.helpers import prepare_axes
         fig, axs = prepare_axes(axs, axs_shape=(2,1), figsize=self.figsize)
+        print(test1,test2)
 
-        data = self.avg_iq_corrected if corrected else self.avg_iq
+        data = self.avg_iq_corrected if apply_e_delay else self.avg_iq
         axs[0].plot(self.frequencies, np.abs(data))
         axs[1].plot(self.frequencies, np.angle(data, deg=True))
         axs[1].set_xlabel("Frequency [Hz]")
@@ -130,14 +131,36 @@ class ResonatorSpectroscopyRuntime(QMsmtRuntime):
         fig.tight_layout()
         return fig, axs
 
+    @annotate_method(plot_name="mag_phase_vs_dac2", axs_shape=(2,1))
+    def plot_data_iq_2(self, axs=None, apply_e_delay:bool=True):
+        from acadia_gui.helpers import prepare_axes
+        fig, axs = prepare_axes(axs, axs_shape=(2,1), figsize=self.figsize)
+
+        data = self.avg_iq_corrected if apply_e_delay else self.avg_iq
+        axs[0].plot(self.frequencies, np.abs(data), color="C1")
+        axs[1].plot(self.frequencies, np.angle(data, deg=True))
+        axs[1].set_xlabel("Frequency [Hz]")
+
+        axs[1].set_ylabel("Phase (deg)")
+        axs[0].set_ylabel("Mag (a.u.)")
+
+        fig.tight_layout()
+        return fig, axs
+
+    @annotate_method(plot_name="mag_phase_vs_dac3", axs_shape=(1,1))
+    def plot_data_iq_3(self, axs=None):
+        from acadia_gui.helpers import prepare_axes
+        fig, axs = prepare_axes(axs, axs_shape=(1,1), figsize=self.figsize)
+        data = self.avg_iq
+        axs[0].plot(self.frequencies, np.abs(data), color="C2")
+        axs[0].set_ylabel("Mag (a.u.)")
+
+        fig.tight_layout()
+        return fig, axs
 
 
 
 
-
-    #
-    #
-    #
     #
     # def initialize(self):
     #
