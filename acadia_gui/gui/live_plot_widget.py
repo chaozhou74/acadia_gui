@@ -80,6 +80,7 @@ class LivePlotWidget(QWidget):
         # --- Plot selector ---
         self.plot_selector = QComboBox()
         self.plot_selector.currentIndexChanged.connect(self.select_plot)
+        self.plot_selector.setMinimumWidth(5)
 
         # --- Polling interval input ---
         self.pause_button = QPushButton("Pause Plot")
