@@ -121,3 +121,4 @@ class InstrumentParamsViewer(QWidget):
         self.tree.clear()
         self.selected_instruments.clear()
         self.notice_label.hide()
+        self.load_button.hide()

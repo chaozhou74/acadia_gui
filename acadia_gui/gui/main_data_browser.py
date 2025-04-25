@@ -31,6 +31,12 @@ class RightPanelTabs(QTabWidget):
         self.log_tab.load_logs(folder_path)
         self.kwargs_json_tab.load_json(folder_path)  # You can call this after setting the folder
 
+    def clear(self):
+        self.instruments_tab.clear()
+        self.config_yaml_tab.clear()
+        self.kwargs_json_tab.clear()
+        self.log_tab.clear()
+
 
 class DataBrowser(QMainWindow):
     def __init__(self, root_path, client_station=None, theme:str="default"):
@@ -89,8 +95,7 @@ class DataBrowser(QMainWindow):
     def on_folder_selected(self, folder_path):
         if not is_datafolder(folder_path):
             self.figure_display.clear()
-            self.right_tabs.instruments_tab.clear()
-            self.right_tabs.config_yaml_tab.clear()
+            self.right_tabs.clear()
             return
 
         self.figure_display.load_images(folder_path)

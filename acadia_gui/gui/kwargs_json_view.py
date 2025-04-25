@@ -9,11 +9,12 @@ from PyQt5.QtGui import QKeySequence, QColor, QBrush
 import numpy as np
 import matplotlib.pyplot as plt
 import binascii
+from acadia.runtime import Runtime
 
 KWARGS_JSON_FILE = "kwargs.json"
 
 
-# todo: use runtime._untransform_arg at the beginning
+# todo: this should actually be the base of all json file viewer
 
 class KwargsJsonViewer(QWidget):
     def __init__(self, parent=None):
@@ -45,33 +46,48 @@ class KwargsJsonViewer(QWidget):
         with open(self.json_path, "r") as f:
             try:
                 data = json.load(f)
+                data = Runtime._untransform_arg(data)
                 self._populate_tree(data)
             except Exception as e:
                 self.tree.addTopLevelItem(QTreeWidgetItem(["Error", str(e)]))
 
     def _populate_tree(self, obj, parent=None):
         """Recursively populate the tree with dictionary/list items."""
-        if parent is None:
-            parent = self.tree.invisibleRootItem()
+        try:
+            if parent is None:
+                parent = self.tree.invisibleRootItem()
 
-        if isinstance(obj, dict):
-            for key, val in obj.items():
-                item = QTreeWidgetItem([str(key), self._summary(val)])
-                parent.addChild(item)
-                self._populate_tree(val, item)
-        elif isinstance(obj, list):
-            for idx, val in enumerate(obj):
-                item = QTreeWidgetItem([f"[{idx}]", self._summary(val)])
-                parent.addChild(item)
-                self._populate_tree(val, item)
+            if isinstance(obj, dict):
+                for key, val in obj.items():
+                    item = QTreeWidgetItem([str(key)])
+                    item.setData(0, Qt.UserRole, val)  # <-- store object here
+                    parent.addChild(item)
+                    self._populate_tree(val, item)
 
-    def _summary(self, val):
+            elif isinstance(obj, (list, np.ndarray, tuple)):
+                parent.setText(1, str(obj))
+                parent.setData(0, Qt.UserRole, obj)  # <-- also store array or list here
+                for idx, val in enumerate(obj):
+                    item = QTreeWidgetItem([f"[{idx}]", self._list_summary(val)])
+                    item.setData(0, Qt.UserRole, val)
+                    parent.addChild(item)
+                    self._populate_tree(val, item)
+            else:
+                parent.setText(1, str(obj))
+                parent.setData(0, Qt.UserRole, obj)
+
+        except Exception as e:
+            parent.setText(1, str(e))
+
+    def _list_summary(self, val):
         """Show summary for nested structures."""
-        if isinstance(val, dict):
-            return f"dict ({len(val)} keys)"
-        elif isinstance(val, list):
-            return f"list ({len(val)} items)"
-        return str(val)
+        flat = np.asarray(val).flat
+        if len(flat) > 1:
+            show_val = f"{val.__class__.__name__}; [{flat[0]:.4e}, ... ,{flat[-1]:.4e}]; {np.asarray(val).shape}"
+        else:
+            show_val = str(val)
+        return show_val
+
 
     def keyPressEvent(self, event):
         """Ctrl+C copies the value column and flashes the row."""
@@ -92,27 +108,32 @@ class KwargsJsonViewer(QWidget):
             return
 
         menu = QMenu()
-        value = selected.text(1)
+        obj = selected.data(0, Qt.UserRole)
 
+        # add copy option
         copy_action = menu.addAction("Copy Value")
 
-        plot_action = None
-        if value.startswith("ndarray;"):
+        # add plot option for ndarray
+        if isinstance(obj, np.ndarray):
             plot_action = menu.addAction("Plot ndarray")
 
+        # get action
         action = menu.exec_(self.tree.viewport().mapToGlobal(position))
+        if action is None:
+            return
 
+        # copy action
         if action == copy_action:
-            QApplication.clipboard().setText(value)
+            QApplication.clipboard().setText(str(obj))
             self._flash_item(selected)
 
+        # plot action
         elif action == plot_action:
             try:
-                arr = self._parse_ndarray(value)
-                if arr is not None:
-                    self._plot_array(arr)
+                self._plot_array(selected.text(0), obj)
             except Exception as e:
                 print(f"Failed to plot ndarray: {e}")
+
 
     def _flash_item(self, item):
         """Flash the value cell background by temporarily deselecting and reselecting."""
@@ -131,21 +152,24 @@ class KwargsJsonViewer(QWidget):
         QTimer.singleShot(200, restore)
 
 
-    def _parse_ndarray(self, value_str):
-        """Decode ndarray;... to a NumPy array (assumes float32 little-endian)."""
-        from acadia.runtime import Runtime
-        arr =  Runtime._untransform_arg(value_str)
-        print(arr)
-        return arr
-
-
-    def _plot_array(self, arr):
+    def _plot_array(self, name, arr):
         """Plot NumPy array in a new window."""
         plt.figure("ndarray plot")
-        plt.plot(arr, marker='o', linestyle='-')
-        plt.title("ndarray content")
+        if np.iscomplexobj(arr):
+            plt.plot(arr.real, marker='o', linestyle='-', label='Real')
+            plt.plot(arr.imag, marker='x', linestyle='--', label='Imag')
+            plt.title("Complex ndarray: Real and Imag parts")
+            plt.legend()
+        else:
+            plt.plot(arr, marker='o', linestyle='-')
+
+        plt.title(name)
         plt.xlabel("Index")
         plt.ylabel("Value")
         plt.grid(True)
         plt.show()
 
+    def clear(self):
+        """Clear tree and internal data to avoid stale references."""
+        self.tree.clear()
+        self.json_path = None

@@ -410,9 +410,39 @@ class LivePlotWidget(QWidget):
         group_box.setVisible(bool(widgets))
         return widgets
 
+    def clear(self):
+        self.stop()
+        def clear_layout(layout):
+            while layout.count():
+                item = layout.takeAt(0)
+                widget = item.widget()
+                sublayout = item.layout()
+                if widget:
+                    widget.deleteLater()
+                elif sublayout:
+                    clear_layout(sublayout)
+
+        clear_layout(self.process_kwargs_layout)
+        clear_layout(self.plot_kwargs_layout)
+
+        self.process_inputs = {}
+        self.plot_inputs = {}
+
+        # Reset dropdown and state
+        self.plot_selector.clear()
+        self.current_plot_name = None
+        self.plot_registry = {}
+
+        # Progress bar reset
+        self.progress_bar.setValue(0)
+        self.progress_bar.setFormat("0/0")
+
+        # Also optionally clear these for sanity
+        self.data_path = None
+        self.rt = None
+        self.data_processor_name = None
+
 
 
     # todo: right-click options on images
-
-    # fixme: add kwargs tab
     # fixme: add update button.
