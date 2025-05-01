@@ -29,7 +29,7 @@ class RightPanelTabs(QTabWidget):
         self.instruments_tab.load_json(folder_path)
         self.config_yaml_tab.load_yaml_files(folder_path)
         self.log_tab.load_logs(folder_path)
-        self.kwargs_json_tab.load_json(folder_path)  # You can call this after setting the folder
+        self.kwargs_json_tab.load_json(folder_path)
 
     def clear(self):
         self.instruments_tab.clear()

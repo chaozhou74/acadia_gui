@@ -63,6 +63,7 @@ class InstrumentParamsViewer(QWidget):
         self.tree.show()
         self.select_all_checkbox.show()
         self.load_button.show()
+        self.load_button.setEnabled(True)
 
         self.inst_data = load_inst_params(folder_path)
         if not self.inst_data:

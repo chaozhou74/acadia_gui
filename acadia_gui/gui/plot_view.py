@@ -88,6 +88,7 @@ class FigureDisplayWidget(QWidget):
         if self.folder_path:
             self.load_pickle_button.setEnabled(False)
             try:
+                self.live_plot.clear()
                 self.stack.setCurrentIndex(1)
                 self.live_plot.start(self.folder_path)
             except Exception as e:
