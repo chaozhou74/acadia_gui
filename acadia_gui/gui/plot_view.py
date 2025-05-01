@@ -72,6 +72,7 @@ class FigureDisplayWidget(QWidget):
         self.folder_path = folder_path
         png_files = [f for f in os.listdir(folder_path) if f.lower().endswith('.png')]
         self.png_paths = [os.path.join(folder_path, f) for f in png_files]
+        self.png_paths = sorted(self.png_paths) # sort alphabetically
         self.figure_selector.clear()
 
         if self.png_paths:

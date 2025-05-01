@@ -26,6 +26,7 @@ def get_registered_plot_methods(runtime_obj)-> Dict[str, str]:
         plot_name = getattr(method, PLOT_NAME_TAG, None)
         if callable(method) and (plot_name is not None):
             plots[plot_name] = attr
+    plots = dict(sorted(plots.items())) # sort by plot name alphabetically
     return plots
 
 def save_registered_plots(runtime:Runtime, save_pickle=True, do_process=True, transparent=True) -> None:
