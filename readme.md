@@ -46,12 +46,11 @@ To generate live plotting, the Runtime class must define:
 
 ## Todos:
 ### Short term
-- **data path label on top of figure**
 - update button
 - write msmt runtimes
   - qubit rotation function
   - faster sweeps
-- plot right click options (zoom to fit, etc)
+- multi select and trash option in browser window
 
 <br>
 
@@ -65,6 +64,4 @@ To generate live plotting, the Runtime class must define:
 ## Issues
 - run runtime in ipython console gives `.../acadia_gui/acadia_gui/helpers/plot_helpers.py:75: UserWarning: Starting a Matplotlib GUI outside of the main thread will likely fail.
   fig, axs = plt.subplots(*axs_shape, **subplot_kwargs)`
-- log not updating very actively, sometimes need to reclick on the folder
-- There seems to be small msm leak
-- 
+- There seems to be small mem leak

@@ -7,7 +7,7 @@ current_path = str(pathlib.Path(__file__).parent)
 config_path = current_path + "/instruments.yaml"  # path to the initial instrument configuration file
 params_path = current_path + "/ins_params.json"  # path to the instrument parameter saving file
 host_ip = "10.66.152.190"
-host_port = "5555"
+host_port = "5560"
 timeout = 600
 
 def make_client_station():

@@ -119,7 +119,8 @@ if __name__ == "__main__":
     from acadia_gui.examples.instrument_client.ins_client import make_client_station
     station = make_client_station()
 
-    root_path = "/home/chao/Data/LINC_Cooldown_20250416"
+    # root_path = "/home/chao/Data/LINC_Cooldown_20250416"
+    root_path = "/home/rsl/Data"
 
 
     app = QApplication(sys.argv)

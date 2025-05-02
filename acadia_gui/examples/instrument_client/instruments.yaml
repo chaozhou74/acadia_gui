@@ -1,6 +1,6 @@
 test_spa:
   instrument_class: qcodes_drivers.SignalCore_SC5510B.SignalCore_SC5510B
-  serial_number: "10003061"
+  serial_number: "10003062"
 
 
 yoko2:

@@ -5,12 +5,12 @@ from typing import get_type_hints, Literal, get_args
 from collections import defaultdict
 
 from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
+    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QMenu, QAction,
     QProgressBar, QLineEdit, QLabel, QComboBox, QGroupBox, QGridLayout, QCheckBox, QSizePolicy
 )
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg, NavigationToolbar2QT
 from matplotlib.figure import Figure
-from PyQt5.QtCore import QTimer
+from PyQt5.QtCore import QTimer, Qt
 from PyQt5 import QtCore, QtGui
 
 from acadia_qmsmt.helpers import load_runtime_from_data_dir
@@ -63,6 +63,17 @@ class LivePlotWidget(QWidget):
         self.plot_registry = {}
         self.current_plot_name = None
         self.ready = False
+        self.folder_label = QLabel(" ")
+        self.folder_label.setAlignment(Qt.AlignCenter)
+        self.folder_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+
+        # Each item is a tuple: (label, is_checkable, handler_function)
+        self.right_click_actions = [
+            ("Autoscale", True, self.autoscale_ax),
+            #  can have more like:
+            # ("Reset Zoom", False, self.reset_zoom),
+        ]
+        self.checked_right_click_flags = defaultdict(set)  # (plot_name, ax_index) → set of flags
 
         # --- Matplotlib figure/canvas ---
         self.canvas = FigureCanvasQTAgg(Figure())
@@ -74,7 +85,8 @@ class LivePlotWidget(QWidget):
             QSizePolicy.Expanding,
             QSizePolicy.Expanding,
         )
-        self.canvas.setMinimumHeight(200)  # optional safety
+        self.canvas.setMinimumHeight(200)
+        self.canvas.mpl_connect("button_press_event", self.handle_right_click)
 
 
         # --- Plot selector ---
@@ -125,6 +137,7 @@ class LivePlotWidget(QWidget):
         # --- Layout setup ---
         layout = QVBoxLayout(self)
         layout.addWidget(self.toolbar)
+        layout.addWidget(self.folder_label)
         layout.addWidget(self.canvas, stretch=1)
         layout.addLayout(interval_row)
         layout.addWidget(self.progress_bar)
@@ -138,6 +151,8 @@ class LivePlotWidget(QWidget):
 
     def start(self, data_path):
         self.data_path = data_path
+        # self.folder_label.setText(f"{os.path.basename(data_path)}")
+        self.folder_label.setText(data_path)
         self.is_paused = False
         self.last_mtime = 0
         self.rt = load_runtime_from_data_dir(self.data_path)
@@ -216,7 +231,7 @@ class LivePlotWidget(QWidget):
             plot_func = getattr(self.rt, method_name)
             self.plot_inputs = self.create_inputs_from_signature(plot_func, self.plot_kwargs_layout,
                                                                  self.plot_kwargs_box)
-
+        self.checked_right_click_flags.clear()
         self.update_plot(force=True)
 
 
@@ -260,6 +275,11 @@ class LivePlotWidget(QWidget):
             axs_shape = getattr(plot_method, AXS_SHAPE_TAG, (1, 1))
             axs = self.canvas.figure.subplots(*axs_shape)
             plot_method(axs=axs, **plot_kwargs)
+            for idx, ax in enumerate(self.canvas.figure.axes):
+                key = (self.current_plot_name, idx)
+                for label, _, handler in self.right_click_actions:
+                    if label in self.checked_right_click_flags[key]:
+                        handler(ax)
             self.canvas.draw()
 
             if completed_iter is not None:
@@ -430,6 +450,7 @@ class LivePlotWidget(QWidget):
 
         # Reset dropdown and state
         self.plot_selector.clear()
+        self.checked_right_click_flags.clear()
         self.current_plot_name = None
         self.plot_registry = {}
 
@@ -442,7 +463,57 @@ class LivePlotWidget(QWidget):
         self.rt = None
         self.data_processor_name = None
 
+    def handle_right_click(self, event):
+        if event.button != 3 or event.inaxes is None:
+            return
 
+        ax = event.inaxes
+        plot_name = self.current_plot_name
+        ax_list = self.canvas.figure.axes
+        try:
+            ax_index = ax_list.index(ax)
+        except ValueError:
+            return  # shouldn't happen
 
-    # todo: right-click options on images
+        key = (plot_name, ax_index)
+        menu = QMenu()
+
+        for label, is_checkable, handler in self.right_click_actions:
+            action = QAction(label, self)
+            action.setCheckable(is_checkable)
+            if is_checkable:
+                action.setChecked(label in self.checked_right_click_flags[key])
+
+                def toggler(checked, lbl=label, k=key, h=handler):
+                    if checked:
+                        self.checked_right_click_flags[k].add(lbl)
+                        h(ax)
+                    else:
+                        self.checked_right_click_flags[k].discard(lbl)
+
+                action.toggled.connect(toggler)
+            else:
+                action.triggered.connect(lambda checked=False, h=handler: h(ax))
+
+            menu.addAction(action)
+
+        menu.exec_(QtGui.QCursor.pos())
+
+    def autoscale_ax(self, ax):
+        # Autoscale line/plot data
+        ax.set_autoscale_on(True)
+        ax.relim()
+        ax.autoscale_view()
+
+        # Try to autoscale color data (like pcolormesh)
+        for artist in ax.get_children():
+            if hasattr(artist, 'get_array') and hasattr(artist, 'set_clim'):
+                arr = artist.get_array()
+                if arr is not None:
+                    data = arr.compressed() if hasattr(arr, 'compressed') else arr
+                    if data.size > 0:
+                        artist.set_clim(vmin=data.min(), vmax=data.max())
+
+        self.canvas.draw_idle()
+
     # fixme: add update button.

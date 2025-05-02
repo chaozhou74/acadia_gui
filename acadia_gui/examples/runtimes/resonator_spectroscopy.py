@@ -126,6 +126,7 @@ class ResonatorSpectroscopyRuntime(QMsmtRuntime):
         axs[1].set_xlabel("Frequency [Hz]")
 
         axs[1].set_ylabel("Phase (deg)")
+        axs[1].set_ylim(-500,500)
         axs[0].set_ylabel("Mag (a.u.)")
 
         fig.tight_layout()
@@ -152,13 +153,22 @@ class ResonatorSpectroscopyRuntime(QMsmtRuntime):
         from acadia_gui.helpers import prepare_axes
         fig, axs = prepare_axes(axs, axs_shape=(1,1), figsize=self.figsize)
         data = self.avg_iq
-        axs[0].plot(self.frequencies, np.abs(data), color="C2")
-        axs[0].set_ylabel("Mag (a.u.)")
+        axs.plot(self.frequencies, np.abs(data), color="C2")
+        axs.set_ylabel("Mag (a.u.)")
 
         fig.tight_layout()
         return fig, axs
 
 
+    @annotate_method(plot_name="mag_phase_vs_dac4", axs_shape=(1,1))
+    def plot_data_iq_4(self, axs=None):
+        from acadia_gui.helpers import prepare_axes
+        fig, axs = prepare_axes(axs, axs_shape=(1,1), figsize=self.figsize)
+        iters = np.arange(len(self.data_iq))
+        pcm = axs.pcolormesh(iters, self.frequencies, np.angle(self.data_iq).T, vmin=-500, vmax=500)
+        fig.colorbar(pcm, ax=axs)
+        fig.tight_layout()
+        return fig, axs
 
 
     #
