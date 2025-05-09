@@ -1,11 +1,13 @@
 import os
 import subprocess
 from PyQt5.QtWidgets import (QWidget, QFileSystemModel, QTreeView, QVBoxLayout,
-                             QPushButton, QFileDialog, QMenu, QApplication)
+                             QPushButton, QFileDialog, QMenu, QApplication, QHBoxLayout)
 from PyQt5.QtCore import Qt, QModelIndex, QDir, QUrl
 from PyQt5.QtGui import QIcon, QDesktopServices
 
+
 from acadia_gui.helpers import detect_platform, to_windows_path
+from acadia_gui.icons import ICON_PATH
 
 
 def is_datafolder(path):
@@ -57,8 +59,24 @@ class FolderTreeWidget(QWidget):
         self.select_button = QPushButton("Select Root Folder")
         self.select_button.clicked.connect(self.select_new_root)
 
+        self.recent_button = QPushButton(QIcon(os.path.join(ICON_PATH, "most_recent_folder.svg")), "")
+        self.recent_button.setToolTip("Select most recent data folder")
+        self.recent_button.clicked.connect(self.select_most_recent_folder)
+
+        self.sort_mtime_button = QPushButton(QIcon(os.path.join(ICON_PATH, "sort_by_time.svg")), "")
+        self.sort_mtime_button.setToolTip("Sort folders by modification time")
+        self.sort_mtime_button.clicked.connect(self.sort_by_mtime)
+        self.current_sort_order = Qt.DescendingOrder
+
+
+
+        button_row = QHBoxLayout()
+        button_row.addWidget(self.select_button)
+        button_row.addWidget(self.recent_button)
+        button_row.addWidget(self.sort_mtime_button)
+
         layout = QVBoxLayout(self)
-        layout.addWidget(self.select_button)
+        layout.addLayout(button_row)
         layout.addWidget(self.tree)
         self.setLayout(layout)
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -100,3 +118,29 @@ class FolderTreeWidget(QWidget):
         elif action == copy_path_action:
             clipboard = QApplication.clipboard()
             clipboard.setText(path)
+
+    def select_most_recent_folder(self):
+        root_path = self.model.rootPath()
+        most_recent_path = None
+        latest_mtime = None
+
+        for dirpath, dirnames, filenames in os.walk(root_path):
+            if is_datafolder(dirpath):
+                mtime = os.path.getmtime(dirpath)
+                if most_recent_path is None or mtime > latest_mtime:
+                    most_recent_path = dirpath
+                    latest_mtime = mtime
+
+        if most_recent_path:
+            index = self.model.index(most_recent_path)
+            if index.isValid():
+                self.tree.setCurrentIndex(index)
+                self.tree.scrollTo(index)
+                self.on_select_callback(most_recent_path)
+
+    def sort_by_mtime(self):
+        self.tree.sortByColumn(3, self.current_sort_order)
+        # Toggle the sort order for next time
+        self.current_sort_order = (
+            Qt.AscendingOrder if self.current_sort_order == Qt.DescendingOrder else Qt.DescendingOrder
+        )
