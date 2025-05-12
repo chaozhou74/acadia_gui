@@ -45,10 +45,16 @@ class FigureDisplayWidget(QWidget):
         button_row.addWidget(self.switch_to_live_button)
 
         self.png_view = QWidget()
+        self.folder_label = QLabel(" ")
+        self.folder_label.setAlignment(Qt.AlignCenter)
+        self.folder_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+
         png_layout = QVBoxLayout(self.png_view)
+        png_layout.addWidget(self.folder_label)
         png_layout.addWidget(self.figure_selector)
-        png_layout.addWidget(self.image_frame)
+        png_layout.addWidget(self.image_frame, stretch=1)
         png_layout.addLayout(button_row)
+
 
         # Live plot widget
         self.live_plot = LivePlotWidget()
@@ -77,6 +83,7 @@ class FigureDisplayWidget(QWidget):
 
         if self.png_paths:
             self.stack.setCurrentIndex(0)
+            self.folder_label.setText(folder_path)
             self.load_pickle_button.setEnabled(True)
             self.switch_to_live_button.setEnabled(True)
             self.figure_selector.addItems([os.path.basename(f) for f in self.png_paths])
