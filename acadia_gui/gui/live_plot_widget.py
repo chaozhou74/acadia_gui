@@ -4,7 +4,6 @@ import inspect
 from typing import get_type_hints, Literal, get_args
 from collections import defaultdict
 import subprocess
-import getpass
 import logging
 
 import numpy as np
@@ -590,7 +589,7 @@ class LivePlotWidget(QWidget):
 
         painter = QPainter(final_image)
         painter.setPen(Qt.black)
-        painter.setFont(QFont("Arial", 11))
+        painter.setFont(QFont("Arial", 7))
         text = f"{self.data_path}\n{self.current_plot_name}"
         painter.drawText(QtCore.QRect(10, 0, final_width - 20, margin_height), Qt.AlignHCenter | Qt.AlignVCenter, text)
         painter.drawImage(0, margin_height, scaled_qimg)
@@ -601,7 +600,7 @@ class LivePlotWidget(QWidget):
         # powershell, because WSL doesn't have direct access to windows clipboard.
         if detect_platform() == "wsl":
             # --- Save to PNG ---
-            temp_dir = f"/mnt/c/Users/{getpass.getuser()}/AppData/Local/Temp"
+            temp_dir = f"/tmp"
             temp_path = os.path.join(temp_dir, "snapshot.png")
             final_image.save(temp_path, "PNG")
 
