@@ -138,7 +138,7 @@ class FolderTreeWidget(QWidget):
         self.setLayout(layout)
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self.open_context_menu)
-        self.model.directoryLoaded.connect(lambda _: self.tree.sortByColumn(3, Qt.DescendingOrder))
+        # self.model.directoryLoaded.connect(lambda _: self.tree.sortByColumn(3, Qt.DescendingOrder))
 
 
     def source_path_from_proxy_index(self, proxy_index: QModelIndex) -> str:
@@ -267,6 +267,7 @@ class FolderTreeWidget(QWidget):
                 print(f"Failed to delete trash folder {path}: {e}")
 
     def select_most_recent_folder(self):
+        # todo: the sorting can be optimized, kind of slow currently
         root_path = self.model.rootPath()
         most_recent_path = None
         latest_mtime = None

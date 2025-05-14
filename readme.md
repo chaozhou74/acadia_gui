@@ -50,7 +50,7 @@ To generate live plotting, the Runtime class must define:
 - write msmt runtimes
   - qubit rotation function
   - faster sweeps
-- multi select and trash option in browser window
+  
 
 <br>
 

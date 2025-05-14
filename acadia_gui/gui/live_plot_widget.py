@@ -3,25 +3,34 @@ import time
 import inspect
 from typing import get_type_hints, Literal, get_args
 from collections import defaultdict
+import subprocess
+import getpass
+import logging
 
+import numpy as np
 from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QMenu, QAction,
-    QProgressBar, QLineEdit, QLabel, QComboBox, QGroupBox, QGridLayout, QCheckBox, QSizePolicy
+    QWidget, QVBoxLayout, QHBoxLayout, QWidgetAction, QMenu, QAction, QApplication, QToolButton,
+    QProgressBar, QLineEdit, QLabel, QComboBox, QGroupBox, QGridLayout, QCheckBox, QSizePolicy, QFrame
 )
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg, NavigationToolbar2QT
 from matplotlib.figure import Figure
-from PyQt5.QtCore import QTimer, Qt
+from matplotlib.backends.backend_agg import FigureCanvasAgg
+
+from PyQt5.QtCore import QTimer, Qt, QSize
 from PyQt5 import QtCore, QtGui
+from PyQt5.QtGui import QImage, QPainter, QFont, QIcon
 
 from acadia_qmsmt.helpers import load_runtime_from_data_dir
 from acadia_gui import AXS_SHAPE_TAG
 from acadia_gui.helpers import get_registered_plot_methods, get_data_process_method
+from acadia_gui.helpers.path_adapter import to_windows_path, detect_platform
+from acadia_gui.icons import ICON_PATH
 
 # files used for rough estimate of progress rate, ETA, etc
 UPDATE_INDICATOR_FILE = "metadata.txt" # file whose last modified time indicates the last data update
 CREATE_INDICATOR_FILE = "run.py" # file whose creation time indicates the experiment time
 
-
+logger = logging.getLogger("acadia_gui.live_plot")
 
 def parse_inputs(input_dict):
     kwargs = {}
@@ -67,6 +76,13 @@ class LivePlotWidget(QWidget):
         self.folder_label.setAlignment(Qt.AlignCenter)
         self.folder_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
 
+        # -- default snapshot settings
+        self.snapshot_original_dpi = 600 # high dpi
+        self.snapshot_original_width_inch = 5.5 # size for the high DPI figure
+        self.snapshot_original_height_inch = 4
+        self.snapshot_scale_factor = 0.15 # scale factor for the smaller plot
+
+
         # Each item is a tuple: (label, is_checkable, handler_function)
         self.right_click_actions = [
             ("Autoscale", True, self.autoscale_ax),
@@ -94,23 +110,44 @@ class LivePlotWidget(QWidget):
         self.plot_selector.currentIndexChanged.connect(self.select_plot)
         self.plot_selector.setMinimumWidth(5)
 
+        # --- Plot snapshot button -------
+        self.snapshot_button = QToolButton()
+        self.snapshot_button.setIcon(QIcon(os.path.join(ICON_PATH, "snapshot_plot.svg")))
+        self.snapshot_button.setToolTip("Snapshot plot")
+        self.snapshot_button.setIconSize(self.toolbar.iconSize())
+        self.snapshot_button.clicked.connect(self.snapshot_current_plot)
+        self.snapshot_button.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.snapshot_button.customContextMenuRequested.connect(self.show_snapshot_settings)
+
+
         # --- Polling interval input ---
-        self.pause_button = QPushButton("Pause Plot")
+        self._pause_icon = QIcon(os.path.join(ICON_PATH, "pause_plot.svg"))
+        self._resume_icon = QIcon(os.path.join(ICON_PATH, "resume_plot.svg"))
+        self.pause_button = QToolButton()
+        self.pause_button.setIcon(self._pause_icon)
+        self.pause_button.setToolTip("Pause plotting")
+        self.pause_button.setIconSize(self.toolbar.iconSize())
         self.pause_button.clicked.connect(self.toggle_pause)
 
+
         self.interval_input = QLineEdit(str(poll_interval_sec))
-        self.interval_input.setFixedWidth(60)
+        self.interval_input.setFixedWidth(40)
         self.interval_input.setToolTip("Polling interval (in seconds)")
         self.interval_input.editingFinished.connect(self.update_poll_interval)
 
+        separator_line = QFrame()
+        separator_line.setFrameShape(QFrame.VLine)
+        separator_line.setFrameShadow(QFrame.Sunken)
+        separator_line.setFixedHeight(30)
+
         interval_row = QHBoxLayout()
-        interval_row.addWidget(QLabel("Plot:"))
-        interval_row.addWidget(self.plot_selector)
-        interval_row.addStretch()
+        interval_row.addWidget(self.toolbar)
+        interval_row.addWidget(separator_line)
         interval_row.addWidget(QLabel("Poll every:"))
         interval_row.addWidget(self.interval_input)
         interval_row.addWidget(QLabel("sec"))
         interval_row.addWidget(self.pause_button)
+        interval_row.addWidget(self.snapshot_button)
 
         # --- Progress bar ---
         self.progress_bar = QProgressBar()
@@ -136,8 +173,8 @@ class LivePlotWidget(QWidget):
 
         # --- Layout setup ---
         layout = QVBoxLayout(self)
-        layout.addWidget(self.toolbar)
         layout.addWidget(self.folder_label)
+        layout.addWidget(self.plot_selector)
         layout.addWidget(self.canvas, stretch=1)
         layout.addLayout(interval_row)
         layout.addWidget(self.progress_bar)
@@ -167,7 +204,7 @@ class LivePlotWidget(QWidget):
         try:
             self.data_processor_name = get_data_process_method(self.rt)
         except AttributeError as e:
-            print(e)
+            logger.error(e)
             self.data_processor_name = None
 
         if hasattr(self.rt, self.data_processor_name):
@@ -192,7 +229,12 @@ class LivePlotWidget(QWidget):
 
     def toggle_pause(self):
         self.is_paused = not self.is_paused
-        self.pause_button.setText("Resume Plot" if self.is_paused else "Pause Plot")
+        if self.is_paused:
+            self.pause_button.setIcon(self._resume_icon)
+            self.pause_button.setToolTip("Resume plotting")
+        else:
+            self.pause_button.setIcon(self._pause_icon)
+            self.pause_button.setToolTip("Pause plotting")
 
 
     def update_poll_interval(self):
@@ -267,24 +309,13 @@ class LivePlotWidget(QWidget):
             if not method_name:
                 return
 
-            plot_method = getattr(self.rt, method_name)
-            plot_kwargs = parse_inputs(self.plot_inputs)
-
             # Clear and call plot into ax
             self.canvas.figure.clf()
-            axs_shape = getattr(plot_method, AXS_SHAPE_TAG, (1, 1))
-            axs = self.canvas.figure.subplots(*axs_shape)
-            plot_method(axs=axs, **plot_kwargs)
-            for idx, ax in enumerate(self.canvas.figure.axes):
-                key = (self.current_plot_name, idx)
-                for label, _, handler in self.right_click_actions:
-                    if label in self.checked_right_click_flags[key]:
-                        handler(ax)
+            axs = self.make_plot(self.canvas.figure, method_name)
+
             self.canvas.draw()
 
             if completed_iter is not None:
-                # self.progress_bar.setValue(completed_iter)
-                # self.progress_bar.setFormat(f"{completed_iter}/{self.total_iter or '?'}")
                 self._update_progress_bar(completed_iter)
             else:
                 self.progress_bar.setValue(0)
@@ -295,6 +326,32 @@ class LivePlotWidget(QWidget):
         except Exception as e:
             self.progress_bar.setValue(0)
             self.progress_bar.setFormat(f"Error: {str(e)}")
+            logger.error(e)
+
+
+
+    def make_plot(self, figure: Figure, plot_method_name: str):
+        """
+        make the plot with plot_method_name in the given figure
+        """
+        # get plot function
+        plot_method = getattr(self.rt, plot_method_name)
+        # get plot kwargs from gui input
+        plot_kwargs = parse_inputs(self.plot_inputs)
+        # prepare plot axs
+        axs_shape = getattr(plot_method, AXS_SHAPE_TAG, (1, 1))
+        axs = figure.subplots(*axs_shape)
+        # make plot
+        plot_method(axs=axs, **plot_kwargs)
+        # apply right-click options
+        axs = np.asarray(axs).flat
+        for idx, ax in enumerate(axs):
+            key = (self.current_plot_name, idx)
+            for label, _, handler in self.right_click_actions:
+                if label in self.checked_right_click_flags[key]:
+                    handler(ax)
+        return axs
+
 
 
     def _update_progress_bar(self, completed_iter):
@@ -327,6 +384,7 @@ class LivePlotWidget(QWidget):
 
         except Exception as e:
             self.progress_bar.setFormat(f"{completed_iter}/{self.total_iter} | ETA error: {e}")
+            logger.error(f"ETA error: {e}")
 
     def set_theme(self, theme_name):
         from matplotlib import style as mpl_style
@@ -382,7 +440,6 @@ class LivePlotWidget(QWidget):
         row_layout.addWidget(widget)
         return widget
 
-
     def create_inputs_from_signature(self, func, layout: QVBoxLayout, group_box: QGroupBox):
         # --- Clear old layout ---
         def clear_layout(l):
@@ -430,39 +487,8 @@ class LivePlotWidget(QWidget):
         group_box.setVisible(bool(widgets))
         return widgets
 
-    def clear(self):
-        self.stop()
-        def clear_layout(layout):
-            while layout.count():
-                item = layout.takeAt(0)
-                widget = item.widget()
-                sublayout = item.layout()
-                if widget:
-                    widget.deleteLater()
-                elif sublayout:
-                    clear_layout(sublayout)
 
-        clear_layout(self.process_kwargs_layout)
-        clear_layout(self.plot_kwargs_layout)
-
-        self.process_inputs = {}
-        self.plot_inputs = {}
-
-        # Reset dropdown and state
-        self.plot_selector.clear()
-        self.checked_right_click_flags.clear()
-        self.current_plot_name = None
-        self.plot_registry = {}
-
-        # Progress bar reset
-        self.progress_bar.setValue(0)
-        self.progress_bar.setFormat("0/0")
-
-        # Also optionally clear these for sanity
-        self.data_path = None
-        self.rt = None
-        self.data_processor_name = None
-
+    # ---------- right click options --------------------------
     def handle_right_click(self, event):
         if event.button != 3 or event.inaxes is None:
             return
@@ -516,4 +542,194 @@ class LivePlotWidget(QWidget):
 
         self.canvas.draw_idle()
 
+
+    # --------------- snapshot for note taking -------------------------------------
+    def snapshot_current_plot(self):
+        """
+        Create a high DPI version of the plot, then scale it down for easier fitting into onenote pages, then copy that
+        image into clipboard.
+
+        We have to do in this way because directly scaling will just average over pixels, which makes the final
+        image very blurry.
+
+        """
+        # --- Create the high-DPI figure ---
+        fig = Figure(figsize=(self.snapshot_original_width_inch, self.snapshot_original_height_inch),
+                     dpi=self.snapshot_original_dpi)
+        canvas = FigureCanvasAgg(fig)
+
+        # --- Call the registered plot method to make a new plot ---
+        method_name = self.plot_registry.get(self.current_plot_name)
+        if method_name and hasattr(self.rt, method_name):
+            axs = self.make_plot(fig, method_name)
+            fig.tight_layout()
+        else:
+            logger.error("Plot method not found.")
+            return
+
+        # --- Draw canvas and grab as raw buffer ---
+        canvas.draw()
+        raw_data = canvas.buffer_rgba()
+        w, h = canvas.get_width_height()
+
+        # --- Create QImage from buffer ---
+        qimg = QImage(raw_data, w, h, QImage.Format_RGBA8888)
+
+        # --- Now down-scale the QImage ---
+        target_width = int(w * self.snapshot_scale_factor)
+        target_height = int(h * self.snapshot_scale_factor)
+        scaled_qimg = qimg.scaled(target_width, target_height, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+
+        # --- Add top margin with text ---
+        margin_height = 40
+        final_width = scaled_qimg.width()
+        final_height = scaled_qimg.height() + margin_height
+
+        final_image = QImage(final_width, final_height, QImage.Format_RGB32)
+        final_image.fill(Qt.white)
+
+        painter = QPainter(final_image)
+        painter.setPen(Qt.black)
+        painter.setFont(QFont("Arial", 11))
+        text = f"{self.data_path}\n{self.current_plot_name}"
+        painter.drawText(QtCore.QRect(10, 0, final_width - 20, margin_height), Qt.AlignHCenter | Qt.AlignVCenter, text)
+        painter.drawImage(0, margin_height, scaled_qimg)
+        painter.end()
+
+
+        # if on WSL, we have to first save the figure to a temp file, then transfer it to windows clipboard via
+        # powershell, because WSL doesn't have direct access to windows clipboard.
+        if detect_platform() == "wsl":
+            # --- Save to PNG ---
+            temp_dir = f"/mnt/c/Users/{getpass.getuser()}/AppData/Local/Temp"
+            temp_path = os.path.join(temp_dir, "snapshot.png")
+            final_image.save(temp_path, "PNG")
+
+            # --- Wait for file to appear ---
+            timeout = 2
+            start_time = time.time()
+            while not os.path.exists(temp_path):
+                if time.time() - start_time > timeout:
+                    raise RuntimeError(f"Timeout waiting for snapshot file {temp_path}")
+                time.sleep(0.05)
+
+            # --- Copy to clipboard using PowerShell ---
+            powershell_script = f"""
+            Add-Type -AssemblyName System.Windows.Forms
+            Add-Type -AssemblyName System.Drawing
+            $img = [System.Drawing.Image]::FromFile('{to_windows_path(temp_path)}')
+            [System.Windows.Forms.Clipboard]::SetImage($img)
+            """
+
+            try:
+                subprocess.run(
+                    ['powershell.exe', '-ExecutionPolicy', 'Bypass', '-Command', powershell_script],
+                    check=True
+                )
+                logger.info("Snapshot copied to Windows clipboard using PowerShell!")
+            except Exception as e:
+                logger.error(f"Failed to copy to clipboard: {e}")
+
+        # if on actual linux, we can just directly copy to clipboard.
+        else:
+            # --- Copy directly to clipboard ---
+            try:
+                clipboard = QApplication.clipboard()
+                clipboard.setImage(final_image)
+                logger.info("Snapshot copied to clipboard!")
+            except Exception as e:
+                logger.error(f"Failed to copy snapshot to clipboard: {e}")
+
+        # clean up
+        del fig
+        del canvas
+
+    def show_snapshot_settings(self):
+        """
+        menu for adjusting the snapshot parameters
+        """
+        menu = QMenu(self)
+        # --- Create a small QWidget to hold all input fields ---
+        widget = QWidget()
+        layout = QGridLayout(widget)
+
+        dpi_input = QLineEdit(str(self.snapshot_original_dpi))
+        width_input = QLineEdit(str(self.snapshot_original_width_inch))
+        height_input = QLineEdit(str(self.snapshot_original_height_inch))
+        scale_input = QLineEdit(str(self.snapshot_scale_factor))
+
+        for lineedit in (dpi_input, width_input, height_input, scale_input):
+            lineedit.setFixedWidth(60)
+
+        layout.addWidget(QLabel("Original DPI:"), 0, 0)
+        layout.addWidget(dpi_input, 0, 1)
+        layout.addWidget(QLabel("Original width (in):"), 1, 0)
+        layout.addWidget(width_input, 1, 1)
+        layout.addWidget(QLabel("Original height (in):"), 2, 0)
+        layout.addWidget(height_input, 2, 1)
+        layout.addWidget(QLabel("Scale Factor:"), 3, 0)
+        layout.addWidget(scale_input, 3, 1)
+
+        widget.setLayout(layout)
+
+        widget_action = QWidgetAction(menu)
+        widget_action.setDefaultWidget(widget)
+        menu.addAction(widget_action)
+
+        # --- Add OK and Cancel buttons at the bottom ---
+        ok_action = QAction("OK", self)
+        menu.addAction(ok_action)
+        def accept():
+            try:
+                self.snapshot_original_dpi = int(dpi_input.text())
+                self.snapshot_original_width_inch = float(width_input.text())
+                self.snapshot_original_height_inch = float(height_input.text())
+                self.snapshot_scale_factor = float(scale_input.text())
+            except ValueError:
+                pass
+            menu.close()
+        ok_action.triggered.connect(accept)
+
+        # # --- Make menu release the button when it closes ---
+        def reset_button():
+            self.snapshot_button.setDown(False)
+            self.snapshot_button.update()
+        menu.aboutToHide.connect(reset_button)
+
+        # --- Show the menu just below the snapshot button ---
+        menu.exec_(self.snapshot_button.mapToGlobal(QtCore.QPoint(0, self.snapshot_button.height())))
+
+    # ------------- clear -----------------
+    def clear(self):
+        self.stop()
+        def clear_layout(layout):
+            while layout.count():
+                item = layout.takeAt(0)
+                widget = item.widget()
+                sublayout = item.layout()
+                if widget:
+                    widget.deleteLater()
+                elif sublayout:
+                    clear_layout(sublayout)
+
+        clear_layout(self.process_kwargs_layout)
+        clear_layout(self.plot_kwargs_layout)
+
+        self.process_inputs = {}
+        self.plot_inputs = {}
+
+        # Reset dropdown and state
+        self.plot_selector.clear()
+        self.checked_right_click_flags.clear()
+        self.current_plot_name = None
+        self.plot_registry = {}
+
+        # Progress bar reset
+        self.progress_bar.setValue(0)
+        self.progress_bar.setFormat("0/0")
+
+        # Also optionally clear these for sanity
+        self.data_path = None
+        self.rt = None
+        self.data_processor_name = None
     # fixme: add update button.

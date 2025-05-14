@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   width="24"
+   height="24"
+   viewBox="0 0 24 24"
+   fill="none"
+   stroke="currentColor"
+   stroke-width="2"
+   stroke-linecap="round"
+   stroke-linejoin="round"
+   class="feather feather-image"
+   version="1.1"
+   id="svg1"
+   sodipodi:docname="pause_plot.svg"
+   inkscape:version="1.3.2 (091e20e, 2023-11-25, custom)"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <defs
+     id="defs1" />
+  <sodipodi:namedview
+     id="namedview1"
+     pagecolor="#ffffff"
+     bordercolor="#000000"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     inkscape:zoom="33.499184"
+     inkscape:cx="7.0449477"
+     inkscape:cy="21.761724"
+     inkscape:window-width="3840"
+     inkscape:window-height="2036"
+     inkscape:window-x="3348"
+     inkscape:window-y="-12"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="g2" />
+  <rect
+     x="3"
+     y="3"
+     width="18"
+     height="18"
+     rx="2"
+     ry="2"
+     id="rect1" />
+  <circle
+     cx="8.5"
+     cy="8.5"
+     r="1.5"
+     id="circle1" />
+  <polyline
+     points="21 15 16 10 5 21"
+     id="polyline1" />
+  <g
+     id="g1"
+     transform="matrix(1.3437952,0,0,1.3430256,-0.53700164,-7.7474816)"
+     style="stroke-width:1.48875">
+    <g
+       id="g2"
+       style="stroke-width:1.4887484;stroke-dasharray:none;paint-order:stroke fill markers">
+      <g
+         id="g3"
+         transform="matrix(1.0394593,0,0,1.038614,-0.06162695,-0.87211861)"
+         style="stroke-width:0.85968971;stroke-dasharray:none;paint-order:stroke fill markers">
+        <rect
+           style="fill:#ffca00;fill-opacity:1;stroke:#ffffff;stroke-width:0.85968971;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:0;stroke-dasharray:none;stroke-opacity:1;paint-order:stroke fill markers"
+           id="rect2"
+           width="2.8845863"
+           height="7.4834971"
+           x="1.561999"
+           y="15.102261" />
+        <rect
+           style="fill:#ffca00;fill-opacity:1;stroke:#ffffff;stroke-width:0.85968971;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:0;stroke-dasharray:none;stroke-opacity:1;paint-order:stroke fill markers"
+           id="rect3"
+           width="2.8845863"
+           height="7.4834971"
+           x="5.2843437"
+           y="15.102261" />
+      </g>
+    </g>
+  </g>
+</svg>
