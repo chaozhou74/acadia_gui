@@ -1,20 +1,22 @@
 import os
 import time
 import inspect
+from functools import partial
 from typing import get_type_hints, Literal, get_args
 from collections import defaultdict
 import subprocess
 import logging
 
 import numpy as np
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg, NavigationToolbar2QT
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_agg import FigureCanvasAgg
+from matplotlib.ticker import ScalarFormatter
+
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QWidgetAction, QMenu, QAction, QApplication, QToolButton,
     QProgressBar, QLineEdit, QLabel, QComboBox, QGroupBox, QGridLayout, QCheckBox, QSizePolicy, QFrame
 )
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg, NavigationToolbar2QT
-from matplotlib.figure import Figure
-from matplotlib.backends.backend_agg import FigureCanvasAgg
-
 from PyQt5.QtCore import QTimer, Qt, QSize
 from PyQt5 import QtCore, QtGui
 from PyQt5.QtGui import QImage, QPainter, QFont, QIcon
@@ -75,6 +77,67 @@ def shorten_path_for_display(path, max_chars=55):
     return os.sep.join(head + ["..."] + tail)
 
 
+def format_pcm_coord(ax, x, y):
+    """
+    for overwriting the `format_coord` of mpl ax to include z coordinate for pcolormesh plots
+    """
+    xy_text = f"x={ax.format_xdata(x)}, y={ax.format_ydata(y)}"
+    try:
+        Xedges, Yedges, Z = ax._pcm_xedges, ax._pcm_yedges, ax._pcm_Z
+
+        i = np.searchsorted(Xedges, x) - 1
+        j = np.searchsorted(Yedges, y) - 1
+
+        if 0 <= i < Z.shape[1] and 0 <= j < Z.shape[0]:
+            z_val = Z[j, i]
+            if np.ma.is_masked(z_val):
+                z_str = np.nan
+            else:
+                z_str = ax._pcm_format_z(z_val)
+            # Use default formatting for x and y
+            return f"{xy_text}, z={z_str}"
+        else:
+            return xy_text
+
+    except Exception as e:
+        return xy_text
+
+def _prepare_pcm_edges(ax) -> bool:
+    """
+    gather the edge and z data information of a pcolormesh plot, make a formater for z data
+    """
+    try:
+        mesh = ax.collections[0]
+        coords = mesh._coordinates
+        xedges = np.unique(coords[...,0])
+        yedges = np.unique(coords[...,1])
+        nx = len(xedges)
+        ny = len(yedges)
+        ax._pcm_xedges = xedges
+        ax._pcm_yedges = yedges
+        ax._pcm_Z = mesh.get_array().reshape((ny-1, nx-1))
+
+        # make a mpl formater for the z data
+        # this is smarter than simply doing `.4g/.4f/.4e`, etc.
+        # E.g. this knows the right number of digits to keep when data falls in a small region with a big offset
+        scalar_fmt = ScalarFormatter(useMathText=True)
+        scalar_fmt.set_powerlimits((-3, 4))
+        scalar_fmt.create_dummy_axis()
+        zmin, zmax = np.nanmin(ax._pcm_Z), np.nanmax(ax._pcm_Z)
+        scalar_fmt.axis.set_view_interval(zmin, zmax)
+
+        def format_z(z):
+            if not np.isfinite(z):
+                return str(z)
+            return scalar_fmt.format_data_short(float(z))
+
+        ax._pcm_format_z = format_z
+
+        return True # is pcm plot
+    except Exception as e:
+        return False
+
+
 class LivePlotWidget(QWidget):
     def __init__(self, poll_interval_sec=2, update_indicator_file=UPDATE_INDICATOR_FILE,
                  create_indicator_file=CREATE_INDICATOR_FILE):
@@ -106,6 +169,7 @@ class LivePlotWidget(QWidget):
         self.snapshot_original_width_inch = 5 # size for the high DPI figure
         self.snapshot_original_height_inch = 4
         self.snapshot_scale_factor = 0.1 # scale factor for the smaller plot
+        self.snapshot_title_font = 10
 
 
         # Each item is a tuple: (label, is_checkable, handler_function)
@@ -159,7 +223,7 @@ class LivePlotWidget(QWidget):
 
 
         self.interval_input = QLineEdit(str(poll_interval_sec))
-        self.interval_input.setFixedWidth(40)
+        self.interval_input.setFixedWidth(30)
         self.interval_input.setToolTip("Polling interval (in seconds)")
         self.interval_input.editingFinished.connect(self.update_poll_interval)
 
@@ -339,7 +403,7 @@ class LivePlotWidget(QWidget):
 
             # Clear and call plot into ax
             self.canvas.figure.clf()
-            axs = self.make_plot(self.canvas.figure, method_name)
+            axs = self.make_plot(self.canvas.figure, method_name, prepare_pcm=True)
 
             self.canvas.draw()
 
@@ -357,8 +421,7 @@ class LivePlotWidget(QWidget):
             logger.error(e)
 
 
-
-    def make_plot(self, figure: Figure, plot_method_name: str):
+    def make_plot(self, figure: Figure, plot_method_name: str, prepare_pcm=False):
         """
         make the plot with plot_method_name in the given figure
         """
@@ -371,15 +434,20 @@ class LivePlotWidget(QWidget):
         axs = figure.subplots(*axs_shape)
         # make plot
         plot_method(axs=axs, **plot_kwargs)
-        # apply right-click options
-        axs = np.asarray(axs).flat
-        for idx, ax in enumerate(axs):
+
+        for idx, ax in enumerate(np.asarray(axs).flat):
+            # add z display for pcm plots
+            if prepare_pcm:
+                # do this first so that we don't have to prepare edges over and over again when we hover
+                is_pcm = _prepare_pcm_edges(ax)
+                if is_pcm:
+                    ax.format_coord = partial(format_pcm_coord, ax)
+            # apply right-click options
             key = (self.current_plot_name, idx)
             for label, _, handler in self.right_click_actions:
                 if label in self.checked_right_click_flags[key]:
                     handler(ax)
         return axs
-
 
 
     def _update_progress_bar(self, completed_iter):
@@ -618,8 +686,9 @@ class LivePlotWidget(QWidget):
 
         painter = QPainter(final_image)
         painter.setPen(Qt.black)
-        painter.setFont(QFont("Arial", 10))
-        text = f"{shorten_path_for_display(self.data_path)}\n{self.current_plot_name}"
+        painter.setFont(QFont("Arial", self.snapshot_title_font))
+        max_char = int(self.snapshot_original_width_inch * self.snapshot_scale_factor / self.snapshot_title_font * 1000)
+        text = f"{shorten_path_for_display(self.data_path, max_char)}\n{self.current_plot_name}"
         painter.drawText(QtCore.QRect(10, 0, final_width - 20, margin_height), Qt.AlignHCenter | Qt.AlignVCenter, text)
         painter.drawImage(0, margin_height, scaled_qimg)
         painter.end()
@@ -685,8 +754,9 @@ class LivePlotWidget(QWidget):
         width_input = QLineEdit(str(self.snapshot_original_width_inch))
         height_input = QLineEdit(str(self.snapshot_original_height_inch))
         scale_input = QLineEdit(str(self.snapshot_scale_factor))
+        font_input = QLineEdit(str(self.snapshot_title_font))
 
-        for lineedit in (dpi_input, width_input, height_input, scale_input):
+        for lineedit in (dpi_input, width_input, height_input, scale_input, font_input):
             lineedit.setFixedWidth(50)
 
         label_ = QLabel("Original DPI:")
@@ -705,6 +775,10 @@ class LivePlotWidget(QWidget):
         label_.setToolTip("Scaling factor applied to the original figure, for copying into clipboard")
         layout.addWidget(label_, 3, 0)
         layout.addWidget(scale_input, 3, 1)
+        label_ = QLabel("Title Font Size:")
+        label_.setToolTip("Font size of the data path title")
+        layout.addWidget(label_, 4, 0)
+        layout.addWidget(font_input, 4, 1)
 
         widget.setLayout(layout)
 
@@ -721,13 +795,14 @@ class LivePlotWidget(QWidget):
                 self.snapshot_original_width_inch = float(width_input.text())
                 self.snapshot_original_height_inch = float(height_input.text())
                 self.snapshot_scale_factor = float(scale_input.text())
+                self.snapshot_title_font = int(font_input.text())
             except ValueError:
                 pass
             menu.close()
         ok_action.triggered.connect(accept)
 
         # --- Connect Enter key (returnPressed) ---
-        for lineedit in (dpi_input, width_input, height_input, scale_input):
+        for lineedit in (dpi_input, width_input, height_input, scale_input, font_input):
             lineedit.returnPressed.connect(accept)
 
         # # --- Make menu release the button when it closes ---
@@ -772,4 +847,6 @@ class LivePlotWidget(QWidget):
         self.data_path = None
         self.rt = None
         self.data_processor_name = None
+
+
     # fixme: add update button.

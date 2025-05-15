@@ -174,4 +174,7 @@ QToolBar::separator {
     width: 1px;
     margin: 4px;
 }
+QToolButton:checked {
+    background-color: #bbbbbb; /* or whatever you want for active state */
+}
 

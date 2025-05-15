@@ -38,6 +38,9 @@ QToolBar::separator {
     width: 1px;
     margin: 4px;
 }
+QToolButton:checked {
+    background-color: #888888; /* or whatever you want for active state */
+}
 
 
 QGroupBox {

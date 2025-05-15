@@ -45,7 +45,7 @@ class DataBrowser(QMainWindow):
 
         super().__init__()
         self.setWindowTitle("Data Browser")
-        self.resize(1600, 900)
+        self.resize(1600, 1000)
 
         # --- Menu Bar ---
         self.menu_bar = AppMenuBar(apply_theme_callback=self.apply_theme)
