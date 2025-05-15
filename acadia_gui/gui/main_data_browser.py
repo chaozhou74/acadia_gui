@@ -45,7 +45,7 @@ class DataBrowser(QMainWindow):
 
         super().__init__()
         self.setWindowTitle("Data Browser")
-        self.resize(1500, 900)
+        self.resize(1600, 900)
 
         # --- Menu Bar ---
         self.menu_bar = AppMenuBar(apply_theme_callback=self.apply_theme)
@@ -61,7 +61,7 @@ class DataBrowser(QMainWindow):
         right_splitter = QSplitter(Qt.Horizontal)
         right_splitter.addWidget(self.figure_display)
         right_splitter.addWidget(self.right_tabs)
-        right_splitter.setSizes([800, 450])
+        right_splitter.setSizes([850, 400])
 
         # --- Top-level splitter: tree | main view ---
         main_splitter = QSplitter(Qt.Horizontal)

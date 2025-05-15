@@ -95,6 +95,7 @@ def update_explorer(func):
 class FolderTreeWidget(QWidget):
     def __init__(self, root_path, on_select_callback):
         super().__init__()
+        self.root_path = root_path
         self.on_select_callback = on_select_callback
 
         self.model = DataFolderModel()
@@ -150,10 +151,16 @@ class FolderTreeWidget(QWidget):
         self.on_select_callback(path)
 
     def select_new_root(self):
-        new_root = QFileDialog.getExistingDirectory(self, "Select Root Directory", os.getcwd())
-        if new_root:
-            self.model.setRootPath(new_root)
-            self.tree.setRootIndex(self.model.index(new_root))
+        options = QFileDialog.Options()
+        options |= QFileDialog.DontUseNativeDialog
+        new_root = QFileDialog.getExistingDirectory(self, "Select Root Directory", self.root_path, options=options)
+        self.set_root_path(new_root)
+
+    def set_root_path(self, root_path):
+        if os.path.isdir(root_path):
+            self.model.setRootPath(root_path)
+            self.tree.setRootIndex(self.proxy_model.mapFromSource(self.model.index(root_path)))
+            self.root_path = root_path
 
     def open_context_menu(self, position):
         index = self.tree.indexAt(position)
@@ -183,6 +190,9 @@ class FolderTreeWidget(QWidget):
         else:
             menu.addAction("Trash")
 
+        if not is_datafolder(path):
+            menu.addAction("Set as Root")
+
         return menu
 
     def handle_context_action(self, action_text, path):
@@ -200,6 +210,9 @@ class FolderTreeWidget(QWidget):
 
         elif action_text == "Empty":
             self.handle_empty_trash(path)
+
+        elif action_text == "Set as Root":
+            self.set_root_path(path)
 
 
     def open_in_file_explorer(self, path):

@@ -48,6 +48,32 @@ def parse_inputs(input_dict):
             kwargs[k] = w.text()  # fallback
     return kwargs
 
+def shorten_path_for_display(path, max_chars=55):
+    """
+    Shorten a given path string to fit within a maximum character limit.
+    Always preserves the root folder and the last two folders.
+    Middle sections are included based on available space, prioritizing parts closest to the root and end.
+    """
+    if len(path) <= max_chars:
+        return path
+    parts = path.split(os.sep)
+    if len(parts) < 4:
+        return path[-max_chars:]
+
+    head, mid, tail = [parts[0]], parts[1:-2], parts[-2:]
+    length = 4 + sum(len(p) + 1 for p in head + tail)  # +1 for os.sep, 4 for "..."
+    for i in range(len(mid)):
+        idx = i//2 if i%2 == 0 else -(i//2)-1
+        length += len(mid[idx]) + 1
+        if length > max_chars:
+            break
+        if i%2 == 0: # from beginning
+            head.append(mid[idx])
+        else: # from end
+            tail.insert(0, mid[idx])
+
+    return os.sep.join(head + ["..."] + tail)
+
 
 class LivePlotWidget(QWidget):
     def __init__(self, poll_interval_sec=2, update_indicator_file=UPDATE_INDICATOR_FILE,
@@ -76,10 +102,10 @@ class LivePlotWidget(QWidget):
         self.folder_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
 
         # -- default snapshot settings
-        self.snapshot_original_dpi = 600 # high dpi
-        self.snapshot_original_width_inch = 5.5 # size for the high DPI figure
-        self.snapshot_original_height_inch = 4
-        self.snapshot_scale_factor = 0.15 # scale factor for the smaller plot
+        self.snapshot_original_dpi = 800 # high dpi
+        self.snapshot_original_width_inch = 4 # size for the high DPI figure
+        self.snapshot_original_height_inch = 3
+        self.snapshot_scale_factor = 0.12 # scale factor for the smaller plot
 
 
         # Each item is a tuple: (label, is_checkable, handler_function)
@@ -112,7 +138,10 @@ class LivePlotWidget(QWidget):
         # --- Plot snapshot button -------
         self.snapshot_button = QToolButton()
         self.snapshot_button.setIcon(QIcon(os.path.join(ICON_PATH, "snapshot_plot.svg")))
-        self.snapshot_button.setToolTip("Snapshot plot")
+        self.snapshot_button.setToolTip("Snapshot plot\n"
+                                        "Create a high-DPI figure and scale it down\n"
+                                        "for easier fitting in notebooks.\n"
+                                        "Right-click for settings.")
         self.snapshot_button.setIconSize(self.toolbar.iconSize())
         self.snapshot_button.clicked.connect(self.snapshot_current_plot)
         self.snapshot_button.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -589,8 +618,8 @@ class LivePlotWidget(QWidget):
 
         painter = QPainter(final_image)
         painter.setPen(Qt.black)
-        painter.setFont(QFont("Arial", 7))
-        text = f"{self.data_path}\n{self.current_plot_name}"
+        painter.setFont(QFont("Arial", 10))
+        text = f"{shorten_path_for_display(self.data_path)}\n{self.current_plot_name}"
         painter.drawText(QtCore.QRect(10, 0, final_width - 20, margin_height), Qt.AlignHCenter | Qt.AlignVCenter, text)
         painter.drawImage(0, margin_height, scaled_qimg)
         painter.end()
@@ -658,15 +687,23 @@ class LivePlotWidget(QWidget):
         scale_input = QLineEdit(str(self.snapshot_scale_factor))
 
         for lineedit in (dpi_input, width_input, height_input, scale_input):
-            lineedit.setFixedWidth(60)
+            lineedit.setFixedWidth(50)
 
-        layout.addWidget(QLabel("Original DPI:"), 0, 0)
+        label_ = QLabel("Original DPI:")
+        label_.setToolTip("DPI of the original figure before scaling")
+        layout.addWidget(label_, 0, 0)
         layout.addWidget(dpi_input, 0, 1)
-        layout.addWidget(QLabel("Original width (in):"), 1, 0)
+        label_ = QLabel("Original width (in):")
+        label_.setToolTip("Width of the original figure before scaling")
+        layout.addWidget(label_, 1, 0)
         layout.addWidget(width_input, 1, 1)
-        layout.addWidget(QLabel("Original height (in):"), 2, 0)
+        label_ = QLabel("Original height (in):")
+        label_.setToolTip("Height of the original figure before scaling")
+        layout.addWidget(label_, 2, 0)
         layout.addWidget(height_input, 2, 1)
-        layout.addWidget(QLabel("Scale Factor:"), 3, 0)
+        label_ = QLabel("Scale Factor:")
+        label_.setToolTip("Scaling factor applied to the original figure, for copying into clipboard")
+        layout.addWidget(label_, 3, 0)
         layout.addWidget(scale_input, 3, 1)
 
         widget.setLayout(layout)
@@ -688,6 +725,10 @@ class LivePlotWidget(QWidget):
                 pass
             menu.close()
         ok_action.triggered.connect(accept)
+
+        # --- Connect Enter key (returnPressed) ---
+        for lineedit in (dpi_input, width_input, height_input, scale_input):
+            lineedit.returnPressed.connect(accept)
 
         # # --- Make menu release the button when it closes ---
         def reset_button():
