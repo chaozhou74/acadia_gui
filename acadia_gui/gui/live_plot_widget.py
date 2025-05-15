@@ -103,9 +103,9 @@ class LivePlotWidget(QWidget):
 
         # -- default snapshot settings
         self.snapshot_original_dpi = 800 # high dpi
-        self.snapshot_original_width_inch = 4 # size for the high DPI figure
-        self.snapshot_original_height_inch = 3
-        self.snapshot_scale_factor = 0.12 # scale factor for the smaller plot
+        self.snapshot_original_width_inch = 5 # size for the high DPI figure
+        self.snapshot_original_height_inch = 4
+        self.snapshot_scale_factor = 0.1 # scale factor for the smaller plot
 
 
         # Each item is a tuple: (label, is_checkable, handler_function)
