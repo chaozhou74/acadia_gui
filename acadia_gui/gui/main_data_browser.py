@@ -3,13 +3,17 @@ from PyQt5.QtWidgets import (
     QApplication, QWidget, QMainWindow, QVBoxLayout, QSplitter,
     QTabWidget
 )
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QObject
 
 from acadia_gui.gui import (LogViewer, InstrumentParamsViewer, YamlViewer,
                             FigureDisplayWidget, FolderTreeWidget, is_datafolder,
                             AppMenuBar, KwargsJsonViewer)
 from acadia_gui import THEME_PATH
 
+import gc
+
+def force_garbage_collect():
+    collected = gc.collect()
 
 class RightPanelTabs(QTabWidget):
     def __init__(self, client_station=None):
@@ -48,7 +52,7 @@ class DataBrowser(QMainWindow):
         self.resize(1600, 1000)
 
         # --- Menu Bar ---
-        self.menu_bar = AppMenuBar(apply_theme_callback=self.apply_theme)
+        self.menu_bar = AppMenuBar(parent=self, apply_theme_callback=self.apply_theme)
         self.setMenuBar(self.menu_bar)
 
 
@@ -93,13 +97,16 @@ class DataBrowser(QMainWindow):
         self.move(x, y)
 
     def on_folder_selected(self, folder_path):
+        self.figure_display.clear()
+        self.right_tabs.clear()
+
         if not is_datafolder(folder_path):
-            self.figure_display.clear()
-            self.right_tabs.clear()
             return
 
+        force_garbage_collect()
         self.figure_display.load_images(folder_path)
         self.right_tabs.update_content(folder_path)
+
 
     def apply_theme(self, theme_name):
         try:
@@ -119,8 +126,8 @@ if __name__ == "__main__":
     from acadia_gui.examples.instrument_client.ins_client import make_client_station
     station = make_client_station()
 
-    # root_path = "/home/chao/Data/LINC_Cooldown_20250416"
-    root_path = "/home/rsl/Data"
+    root_path = "/home/chao/Data"
+    # root_path = "/home/rsl/Data"
 
 
     app = QApplication(sys.argv)

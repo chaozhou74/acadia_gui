@@ -96,3 +96,10 @@ class YamlViewer(QTabWidget):
             sections[current_key] = current_lines
 
         return sections
+
+    def clear(self):
+        while self.count():
+            widget = self.widget(0)
+            if widget:
+                widget.deleteLater()
+            self.removeTab(0)

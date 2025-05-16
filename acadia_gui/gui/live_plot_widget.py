@@ -843,10 +843,19 @@ class LivePlotWidget(QWidget):
         self.progress_bar.setValue(0)
         self.progress_bar.setFormat("0/0")
 
-        # Also optionally clear these for sanity
+        # Also clear these for sanity
         self.data_path = None
         self.rt = None
         self.data_processor_name = None
+
+        self.ready = False
+        self.is_paused = False
+        self.last_mtime = 0
+
+        self.canvas.figure.clf()
+        self.canvas.draw()
+
+
 
 
     # fixme: add update button.

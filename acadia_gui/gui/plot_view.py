@@ -148,8 +148,10 @@ class FigureDisplayWidget(QWidget):
 
     def clear(self):
         self.figure_selector.clear()
+        self.image_label.clear()
         self.image_label.setText("Not a data folder (missing run.py)")
         self.load_pickle_button.setEnabled(False)
         self.switch_to_live_button.setEnabled(False)
         self.live_plot.clear()
+        self.folder_label.setText(" ")
         self.stack.setCurrentIndex(0)

@@ -20,18 +20,22 @@ class LogViewer(QTabWidget):
         self.timer.start(1000)  # Check every 1 second
 
     def load_logs(self, folder_path):
+        self.timer.stop()
         self.clear()
         self.folder_path = folder_path
+        self.file_mtimes = {}
+
         log_files = find_log_files(folder_path)
 
         if not log_files:
             browser = QTextBrowser()
             browser.setPlainText("No log files found.")
             self.addTab(browser, "Logs")
-            return
+        else:
+            for fname in log_files:
+                self._add_log_tab(fname)
 
-        for fname in log_files:
-            self._add_log_tab(fname)
+        self.timer.start(1000)
 
     def _add_log_tab(self, fname):
         full_path = os.path.join(self.folder_path, fname)
@@ -81,7 +85,6 @@ class LogViewer(QTabWidget):
 
         self.file_mtimes[fname] = os.path.getmtime(full_path)
 
-
     def check_for_updates(self):
         if not self.folder_path:
             return
@@ -95,3 +98,10 @@ class LogViewer(QTabWidget):
                     self.reload_tab(i)
             except FileNotFoundError:
                 continue
+
+    def clear(self):
+        while self.count():
+            widget = self.widget(0)
+            if widget:
+                widget.deleteLater()
+            self.removeTab(0)
