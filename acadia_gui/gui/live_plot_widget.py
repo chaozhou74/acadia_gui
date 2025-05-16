@@ -6,6 +6,7 @@ from typing import get_type_hints, Literal, get_args
 from collections import defaultdict
 import subprocess
 import logging
+import gc
 
 import numpy as np
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg, NavigationToolbar2QT
@@ -382,7 +383,10 @@ class LivePlotWidget(QWidget):
                 return
             self.last_mtime = current_mtime
 
-            # load runtime and process current data
+            # Clear and load runtime and process current data
+            # need to reload runtime because that's how data got updated
+            self.canvas.figure.clf()
+            gc.collect()
             self.rt = load_runtime_from_data_dir(self.data_path)
 
             completed_iter = None
@@ -401,8 +405,7 @@ class LivePlotWidget(QWidget):
             if not method_name:
                 return
 
-            # Clear and call plot into ax
-            self.canvas.figure.clf()
+            # Call plot into ax
             axs = self.make_plot(self.canvas.figure, method_name, prepare_pcm=True)
 
             self.canvas.draw()
@@ -738,8 +741,9 @@ class LivePlotWidget(QWidget):
                 logger.error(f"Failed to copy snapshot to clipboard: {e}")
 
         # clean up
-        del fig
         del canvas
+        fig.clf()
+        del fig
 
     def show_snapshot_settings(self):
         """

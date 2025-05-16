@@ -104,7 +104,7 @@ class AppMenuBar(QMenuBar):
 
         self.mem_label.setText(f"Memory: {mem_gb:.2f} GB | {num_qobjects} QObjects")
 
-        if self.mem_popup.isVisible():
+        if asizeof and self.mem_popup.isVisible():
             self.update_mem_pop_text()
 
     def get_tab_memory_usage(self):
@@ -118,22 +118,19 @@ class AppMenuBar(QMenuBar):
             "KwargsJsonViewer": getattr(self.parent_window.right_tabs, "kwargs_json_tab", None),
             "FigureDisplayWidget": getattr(self.parent_window, "figure_display", None),
             "FolderTreeWidget": getattr(self.parent_window, "folder_tree", None),
-            "LivePlotWidget": getattr(self.parent_window.figure_display, "live_plot", None),  # If applicable
-            "AppMenuBar": self,
+            "LivePlotWidget": getattr(self.parent_window.figure_display, "live_plot", None),
+            "\nTotal Tracked Memory": self # cause we gather all the objects here
         }
 
         result_lines = ["--- Python Object Mem Usage ---\n"]
-        total_mem = 0
         for name, obj in components.items():
             if obj is not None:
                 size_bytes = asizeof.asizeof(obj)
                 size_mb = size_bytes / (1024 ** 2)
                 result_lines.append(f"{name}: {size_mb:.2f} MB")
-                total_mem += size_mb
             else:
                 result_lines.append(f"{name}: (not found)")
 
-        result_lines.append(f"\nTotal Tracked Memory: {total_mem:.2f} MB")
         return "\n".join(result_lines)
 
 
