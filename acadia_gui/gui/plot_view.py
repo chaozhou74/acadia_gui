@@ -111,6 +111,7 @@ class FigureDisplayWidget(QWidget):
         if pixmap.isNull():
             self.image_label.setText("Failed to load image")
         else:
+            self.image_label.clear()
             self.image_label.setPixmap(pixmap.scaled(
                 self.image_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation
             ))

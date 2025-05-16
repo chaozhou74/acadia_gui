@@ -7,13 +7,15 @@ except ImportError:
     asizeof = None
 
 
-from PyQt5.QtWidgets import QMenuBar, QAction, QLabel, QApplication, QTextEdit, QWidget, QVBoxLayout, QFrame
+from PyQt5.QtWidgets import QMenuBar, QAction, QLabel, QApplication, QTextEdit, QWidget, QVBoxLayout, QFrame, QToolButton, QHBoxLayout
 from PyQt5.QtCore import QTimer, Qt
+from PyQt5.QtGui import QIcon
 
 
 from acadia_gui import THEME_PATH
+from acadia_gui.icons import ICON_PATH
 
-MEM_THRES_MEDIUM = 2 # threshold for medium memory usage, in GB
+MEM_THRES_MEDIUM = 3 # threshold for medium memory usage, in GB
 MEM_THRES_HIGH = 10 # threshold for high memory usage, in GB
 
 
@@ -45,21 +47,22 @@ class AppMenuBar(QMenuBar):
         self.load_themes()
 
         # === Memory usage ===
-        self.mem_label = QLabel("Memory Usage: -- GB")
-        self.mem_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self.mem_label.mousePressEvent = self.toggle_memory_popup
-        self.setCornerWidget(self.mem_label, Qt.TopRightCorner)
+        self.mem_label = QToolButton()
+        self.mem_label.setText("Memory Usage: -- GB") # todo: styling
+        self.mem_label.clicked.connect(self.toggle_memory_popup)
+        self.mem_label.setProperty("class", "hoverFlat")
 
         if asizeof:
             self.mem_popup = QFrame(None, Qt.Popup | Qt.FramelessWindowHint)
+            self.mem_popup.setObjectName("MemoryPopup")
             self.mem_popup.setAttribute(Qt.WA_ShowWithoutActivating)
             self.mem_popup.setFrameShape(QFrame.StyledPanel)
             self.mem_popup.setVisible(False)
 
             self.mem_textbox = QTextEdit(self.mem_popup)
             self.mem_textbox.setReadOnly(True)
-            self.mem_textbox.setMinimumWidth(220)
-            self.mem_textbox.setMinimumHeight(140)
+            self.mem_textbox.setMinimumWidth(250)
+            self.mem_textbox.setMinimumHeight(250)
 
             layout = QVBoxLayout(self.mem_popup)
             layout.setContentsMargins(3, 3, 3, 3)
@@ -72,6 +75,35 @@ class AppMenuBar(QMenuBar):
         self.mem_timer = QTimer()
         self.mem_timer.timeout.connect(self.update_memory_label)
         self.mem_timer.start(1000)
+
+        # === Right panel toggle button ===
+        self.toggle_right_tabs_button = QToolButton()
+        self.toggle_right_tabs_button.setIcon(QIcon.fromTheme(ICON_PATH+"/collapse_right_tabs.svg"))  # Placeholder icon
+        self.toggle_right_tabs_button.setToolTip("Hide right panel")
+        self.toggle_right_tabs_button.setCheckable(True)
+        self.toggle_right_tabs_button.setChecked(False)
+
+        def toggle_right_panel(checked):
+            if self.parent_window:
+                self.parent_window.right_tabs.setVisible(not checked)
+                self.toggle_right_tabs_button.setToolTip("Show right panel" if checked else "Hide right panel")
+
+        self.toggle_right_tabs_button.toggled.connect(toggle_right_panel)
+
+        # Add button into the corner widget
+        separator_line = QFrame()
+        separator_line.setFrameShape(QFrame.VLine)
+        separator_line.setFrameShadow(QFrame.Sunken)
+        corner_widget = QWidget()
+        corner_layout = QHBoxLayout(corner_widget)
+        corner_layout.setContentsMargins(0, 0, 0, 0)
+        corner_layout.setSpacing(4)
+        corner_layout.addWidget(self.mem_label)
+        corner_layout.addWidget(separator_line)
+        corner_layout.addWidget(self.toggle_right_tabs_button)
+        self.setCornerWidget(corner_widget, Qt.TopRightCorner)
+        corner_widget.adjustSize()
+
 
     def load_themes(self):
         self.theme_menu.clear()
@@ -86,9 +118,6 @@ class AppMenuBar(QMenuBar):
         mem_bytes = psutil.Process(os.getpid()).memory_info().rss
         mem_gb = mem_bytes / (1024 ** 3)
 
-        # Count number of live QObjects
-        num_qobjects = count_qobjects() # todo: this should only show in the detailed text box once we done debugging
-
         color = "black"
         style = ""
         if mem_gb > MEM_THRES_HIGH:
@@ -102,7 +131,7 @@ class AppMenuBar(QMenuBar):
         else:
             self.mem_label.setStyleSheet("")
 
-        self.mem_label.setText(f"Memory: {mem_gb:.2f} GB | {num_qobjects} QObjects")
+        self.mem_label.setText(f"Memory: {mem_gb:.2f} GB")
 
         if asizeof and self.mem_popup.isVisible():
             self.update_mem_pop_text()
@@ -112,13 +141,13 @@ class AppMenuBar(QMenuBar):
             return "No parent window found."
 
         components = {
-            "LogViewer": getattr(self.parent_window.right_tabs, "log_tab", None),
-            "InstrumentParamsViewer": getattr(self.parent_window.right_tabs, "instruments_tab", None),
+            "FolderTreeWidget": getattr(self.parent_window, "folder_tree", None),
             "YamlViewer": getattr(self.parent_window.right_tabs, "config_yaml_tab", None),
             "KwargsJsonViewer": getattr(self.parent_window.right_tabs, "kwargs_json_tab", None),
+            "InstrumentParamsViewer": getattr(self.parent_window.right_tabs, "instruments_tab", None),
+            "LogViewer": getattr(self.parent_window.right_tabs, "log_tab", None),
             "FigureDisplayWidget": getattr(self.parent_window, "figure_display", None),
-            "FolderTreeWidget": getattr(self.parent_window, "folder_tree", None),
-            "LivePlotWidget": getattr(self.parent_window.figure_display, "live_plot", None),
+            "| - LivePlotWidget": getattr(self.parent_window.figure_display, "live_plot", None),
             "\nTotal Tracked Memory": self # cause we gather all the objects here
         }
 
@@ -133,14 +162,22 @@ class AppMenuBar(QMenuBar):
 
         return "\n".join(result_lines)
 
-
     def update_mem_pop_text(self):
-        message = self.get_tab_memory_usage()
+
+        # Count number of live QObjects
+        num_qobjects = count_qobjects()
+
+        # Count total python object size
+        py_mem_msg = self.get_tab_memory_usage()
+
+        message = f"--- Numer of Qt QObjects : {num_qobjects} ---\n\n"
+        message += py_mem_msg
         if len(message) > 3000:
             message = message[:3000] + "\n... (truncated)"
         self.mem_textbox.setText(message)
 
-    def toggle_memory_popup(self, event):
+
+    def toggle_memory_popup(self):
         if not asizeof:
             return
 
@@ -151,8 +188,8 @@ class AppMenuBar(QMenuBar):
             self.update_mem_pop_text()
 
             # Position below the mem_label
-            global_pos = self.mem_label.mapToGlobal(self.mem_label.rect().bottomLeft())
-            self.mem_popup.move(global_pos)
+            global_pos = self.mapToGlobal(self.rect().bottomRight())
+            self.mem_popup.move(global_pos.x()-self.mem_popup.sizeHint().width(), global_pos.y())
             self.mem_popup.adjustSize()
             self.mem_popup.show()
 

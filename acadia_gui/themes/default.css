@@ -10,6 +10,10 @@ QStatusBar QLabel {
     font-weight: normal;
 }
 
+QTreeView::item:hover {
+    background-color: #dddddd;
+}
+
 
 /*mpl background behind figure*/
 #livePlotCanvas {
@@ -20,10 +24,10 @@ QStatusBar QLabel {
 #livePlotToolBar {
     background-color: transparent;
 }
-QToolButton {
+QToolButton{
     background-color: #fafafa;
     border: 1px solid #999999;
-    padding: 4px;
+    padding: 1px;
     border-radius: 4px;
 }
 QToolButton:hover {
@@ -31,6 +35,9 @@ QToolButton:hover {
     border-radius: 4px;
 }
 QToolButton:pressed {
+    background-color: #999999;
+}
+QToolButton:checked {
     background-color: #888888;
 }
 QToolBar::separator {
@@ -38,9 +45,28 @@ QToolBar::separator {
     width: 1px;
     margin: 4px;
 }
-QToolButton:checked {
-    background-color: #888888; /* or whatever you want for active state */
+
+QToolBar QLabel {
+    color: #000000;
+    background-color: transparent;
+    padding-left: 5px;
+    padding-right: 5px;
 }
+
+
+/* buttons that only show like a button on hover */
+QToolButton[class="hoverFlat"] {
+    background: transparent;
+    border: none;
+    color: black;
+}
+QToolButton[class="hoverFlat"]:hover {
+    background-color: #dddddd;
+    border: 1px solid #999999;
+    border-radius: 4px;
+}
+
+
 
 
 QGroupBox {
@@ -56,4 +82,5 @@ QGroupBox::title {
     padding: 0 6px;
     background-color: #f0f0f0;  /* optional: highlight title */
 }
+
 

@@ -1,23 +1,39 @@
-/* GLOBAL STYLING */
+/* ========== GLOBAL ========== */
 QWidget {
-    background-color: #1e1e1e;
+    background-color: #3a3a3a;
     color: #dcdcdc;
     font-family: Consolas, Menlo, monospace;
 }
 
-/* TAB & TREE SELECTION */
-QTreeView::item:selected,
-QTabBar::tab:selected,
-QListView::item:selected {
-    background-color: #3d7848;
-    color: #ffffff;
-    border-top-left-radius: 4px;
-    border-top-right-radius: 4px;
+/* ========== MENU BAR ========== */
+QMenuBar {
+    background-color: #2b2b2b;
+    color: #f0f0f0;
+    border-bottom: 1px solid #444444;
+}
+QMenuBar::item:selected {
+    background-color: #3a70b2;
+    color: white;
+}
+QMenuBar::item:pressed {
+    background-color: #2e5f87;
+    color: white;
 }
 
-/* BUTTONS */
+/* ========== MENU ========== */
+QMenu {
+    background-color: #2c2c2c;
+    color: #f0f0f0;
+    border: 1px solid #444;
+}
+QMenu::item:selected {
+    background-color: #3a70b2;
+    color: #ffffff;
+}
+
+/* ========== BUTTONS ========== */
 QPushButton {
-    background-color: #333;
+    background-color: #555555;
     border: 1px solid #555;
     padding: 6px 10px;
     border-radius: 4px;
@@ -32,7 +48,43 @@ QPushButton:pressed {
     border-color: #555;
 }
 
-/* INPUT FIELDS */
+/* Hover-only buttons */
+QToolButton[class="hoverFlat"] {
+    background: transparent;
+    border: none;
+    color: white;
+}
+QToolButton[class="hoverFlat"]:hover {
+    background-color: #555555;
+    border: 1px solid #999999;
+    border-radius: 4px;
+}
+
+/* ========== TOOL BUTTONS & TOOLBAR ========== */
+QToolButton {
+    background-color: #555555;
+    border: 1px solid #777777;
+    padding: 4px 6px;
+    border-radius: 4px;
+}
+QToolButton:hover {
+    background-color: #666666;
+}
+QToolButton:pressed {
+    background-color: #888888;
+}
+QToolButton:checked {
+    background-color: #4a90e2;
+    border: 1px solid #74baff;
+    color: white;
+}
+QToolBar::separator {
+    background-color: #888888;
+    width: 1px;
+    margin: 4px;
+}
+
+/* ========== INPUT FIELDS ========== */
 QLineEdit, QTextEdit, QPlainTextEdit, QComboBox {
     background-color: #292929;
     border: 1px solid #555;
@@ -41,18 +93,7 @@ QLineEdit, QTextEdit, QPlainTextEdit, QComboBox {
     padding: 4px;
 }
 
-/* MENUS */
-QMenu {
-    background-color: #2c2c2c;
-    color: #f0f0f0;
-    border: 1px solid #444;
-}
-QMenu::item:selected {
-    background-color: #3d7848;
-    color: #ffffff;
-}
-
-/* SCROLLBARS */
+/* ========== SCROLLBARS ========== */
 QScrollBar:vertical, QScrollBar:horizontal {
     background: #1c1c1c;
     width: 12px;
@@ -69,112 +110,122 @@ QScrollBar::add-line, QScrollBar::sub-line {
     border: none;
 }
 
-/* CHECKBOXES */
+/* ========== CHECKBOXES ========== */
 QCheckBox {
     spacing: 6px;
 }
-QCheckBox::indicator {
+QCheckBox::indicator,
+QTreeView::indicator {
     width: 16px;
     height: 16px;
     border-radius: 4px;
     border: 1px solid #666;
     background-color: #3a3a3a;
 }
-QCheckBox::indicator:checked {
-    background-color: #6cbb6c;
-    border: 1px solid #8dd88d;
-}
-QCheckBox::indicator:unchecked {
-    background-color: #3a3a3a;
-}
-QCheckBox::indicator:hover {
-    border: 1px solid #aaa;
-}
-
-/* TREE CHECKBOXES (same style) */
-QTreeView::indicator {
-    width: 12px;
-    height: 12px;
-    border-radius: 3px;
-    border: 1px solid #666;
-    background-color: #3a3a3a;
-}
+QCheckBox::indicator:checked,
 QTreeView::indicator:checked {
-    background-color: #6cbb6c;
+    background-color: #4a90e2;
+    border: 1px solid #74baff;
 }
-QTreeView::indicator:unchecked {
-    background-color: #3a3a3a;
-}
+QCheckBox::indicator:hover,
 QTreeView::indicator:hover {
     border: 1px solid #aaa;
 }
 
-/* TABS */
+/* ========== TREE VIEW ========== */
+QTreeView {
+    alternate-background-color: #333333;
+    show-decoration-selected: 1;
+    selection-background-color: #3a70b2;
+    selection-color: white;
+}
+QTreeView::item:hover {
+    background-color: #444444;
+}
+QTreeView::item:selected {
+    background-color: #3a70b2;
+    color: white;
+}
+QTreeView::indicator {
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+}
+
+/* ========== LIST VIEW ========== */
+QListView::item:selected {
+    background-color: #3a70b2;
+    color: #ffffff;
+    border-top-left-radius: 4px;
+    border-top-right-radius: 4px;
+}
+
+/* ========== TABS ========== */
 QTabBar::tab {
     background: #2c2c2c;
     color: #cccccc;
     padding: 6px 12px;
+    border: 1px solid #444;
     border-top-left-radius: 4px;
     border-top-right-radius: 4px;
+    border-bottom: none;
 }
 QTabBar::tab:selected {
-    background: #3d7848;
+    background: #3a70b2;
     color: white;
 }
 QTabBar::tab:hover {
     background: #3a3a3a;
 }
+QTabWidget::pane {
+    border: 1px solid #444;
+    top: -1px;
+}
 
+/* ========== GROUP BOX ========== */
+QGroupBox {
+    border: 1px solid #444;
+    border-radius: 5px;
+    margin-top: 10px;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    left: 10px;
+    padding: 0 3px;
+    color: #74baff;
+}
+
+/* ========== STATUS BAR ========== */
+QStatusBar QLabel {
+    color: white;
+    font-weight: normal;
+    background-color: #2b2b2b;
+    border-top: 1px solid #444;
+}
+
+/* ========== PLOT LABELS / BACKGROUND ========== */
 QLabel#plotBackground {
     background-color: #bbbbbb;
     padding: 10px;
     border: 1px solid #505050;
     border-radius: 4px;
 }
-
-
-QStatusBar QLabel {
-    color: white;
-    font-weight: normal;
-    background-color: #2b2b2b;
-}
-
-
-QMenuBar {
-    background-color: #2b2b2b;
-    color: white;
-    border-bottom: 1px solid #444444;
-}
-
-/*mpl background behind figure*/
 #livePlotCanvas {
     background-color: #505050;
 }
 
-
-/* mpl tool widget */
-#livePlotToolBar {
-    background-color: transparent;
-}
-QToolButton {
-    background-color: #505050;
-    border: 1px solid #777777;
-    padding: 4px;
-    border-radius: 4px;
-}
-QToolButton:hover {
-    background-color: #666666;
-    border-radius: 4px;
-}
-QToolButton:pressed {
-    background-color: #888888;
-}
-QToolBar::separator {
-    background-color: #888888;
-    width: 1px;
-    margin: 4px;
-}
-QToolButton:checked {
-    background-color: #bbbbbb; /* or whatever you want for active state */
+/* Memory popup frame */
+QFrame#MemoryPopup {
+    background-color: #2c2c2c;
+    border: 1px solid #444;
+    border-radius: 6px;
 }
 
+/* Text inside memory popup */
+QFrame#MemoryPopup QTextEdit {
+    background-color: #2c2c2c;
+    color: #dcdcdc;
+    border: none;
+    font-family: Consolas, Menlo, monospace;
+    font-size: 10pt;
+}

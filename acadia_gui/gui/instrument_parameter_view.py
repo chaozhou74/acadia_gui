@@ -52,6 +52,8 @@ class InstrumentParamsViewer(QWidget):
         self.load_button.clicked.connect(self.load_selected_parameters)
         self.load_button.setEnabled(self.client_station is not None)
         self.layout.addWidget(self.load_button)
+        if self.client_station is None:
+            self.load_button.setToolTip("No Instrument client station detected")
 
         self.setLayout(self.layout)
 
@@ -63,7 +65,7 @@ class InstrumentParamsViewer(QWidget):
         self.tree.show()
         self.select_all_checkbox.show()
         self.load_button.show()
-        self.load_button.setEnabled(True)
+        self.load_button.setEnabled(self.client_station is not None)
 
         self.inst_data = load_inst_params(folder_path)
         if not self.inst_data:

@@ -124,14 +124,15 @@ class DataBrowser(QMainWindow):
 
 if __name__ == "__main__":
     from acadia_gui.examples.instrument_client.ins_client import make_client_station
-    station = make_client_station()
+    # inst_station = make_client_station() # for setting instrument parameters from gui
+    inst_station = None
 
     root_path = "/home/chao/Data"
     # root_path = "/home/rsl/Data"
 
 
     app = QApplication(sys.argv)
-    window = DataBrowser(root_path, station)
+    window = DataBrowser(root_path, inst_station)
     window.show()
     sys.exit(app.exec_())
 

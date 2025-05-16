@@ -49,8 +49,12 @@ To generate live plotting, the Runtime class must define:
 - update button
 - write msmt runtimes
   - qubit rotation function
-  - faster sweeps
-  
+  - generic faster sweeps
+
+
+
+- shell scripts for quick start
+  - auto connection to existing client station? 
 
 <br>
 
@@ -65,3 +69,4 @@ To generate live plotting, the Runtime class must define:
 - run runtime in ipython console gives `.../acadia_gui/acadia_gui/helpers/plot_helpers.py:75: UserWarning: Starting a Matplotlib GUI outside of the main thread will likely fail.
   fig, axs = plt.subplots(*axs_shape, **subplot_kwargs)`
 - There seems to be small mem leak
+  - seems to happen  when changing from live plot to static fig?

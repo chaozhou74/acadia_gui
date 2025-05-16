@@ -77,6 +77,14 @@ def shorten_path_for_display(path, max_chars=55):
 
     return os.sep.join(head + ["..."] + tail)
 
+def clear_layout(layout):
+    # --- Clear old layout ---
+    while layout.count():
+        item = layout.takeAt(0)
+        if item.widget():
+            item.widget().deleteLater()
+        elif item.layout():
+            clear_layout(item.layout())
 
 def format_pcm_coord(ax, x, y):
     """
@@ -231,14 +239,14 @@ class LivePlotWidget(QWidget):
         separator_line = QFrame()
         separator_line.setFrameShape(QFrame.VLine)
         separator_line.setFrameShadow(QFrame.Sunken)
-        separator_line.setFixedHeight(30)
+        separator_line.setFixedHeight(25)
 
         interval_row = QHBoxLayout()
         interval_row.addWidget(self.toolbar)
         interval_row.addWidget(separator_line)
         interval_row.addWidget(QLabel("Poll every:"))
         interval_row.addWidget(self.interval_input)
-        interval_row.addWidget(QLabel("sec"))
+        interval_row.addWidget(QLabel("s"))
         interval_row.addWidget(self.pause_button)
         interval_row.addWidget(self.snapshot_button)
 
@@ -539,16 +547,8 @@ class LivePlotWidget(QWidget):
         row_layout.addWidget(widget)
         return widget
 
-    def create_inputs_from_signature(self, func, layout: QVBoxLayout, group_box: QGroupBox):
-        # --- Clear old layout ---
-        def clear_layout(l):
-            while l.count():
-                item = l.takeAt(0)
-                if item.widget():
-                    item.widget().deleteLater()
-                elif item.layout():
-                    clear_layout(item.layout())
 
+    def create_inputs_from_signature(self, func, layout: QVBoxLayout, group_box: QGroupBox):
         clear_layout(layout)
 
         # --- Parse signature and type hints ---
@@ -821,15 +821,6 @@ class LivePlotWidget(QWidget):
     # ------------- clear -----------------
     def clear(self):
         self.stop()
-        def clear_layout(layout):
-            while layout.count():
-                item = layout.takeAt(0)
-                widget = item.widget()
-                sublayout = item.layout()
-                if widget:
-                    widget.deleteLater()
-                elif sublayout:
-                    clear_layout(sublayout)
 
         clear_layout(self.process_kwargs_layout)
         clear_layout(self.plot_kwargs_layout)
@@ -854,6 +845,7 @@ class LivePlotWidget(QWidget):
 
         self.ready = False
         self.is_paused = False
+        self.pause_button.setIcon(self._pause_icon)
         self.last_mtime = 0
 
         self.canvas.figure.clf()
