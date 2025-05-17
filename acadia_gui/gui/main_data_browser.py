@@ -7,7 +7,7 @@ from PyQt5.QtCore import Qt, QObject
 
 from acadia_gui.gui import (LogViewer, InstrumentParamsViewer, YamlViewer,
                             FigureDisplayWidget, FolderTreeWidget, is_datafolder,
-                            AppMenuBar, KwargsJsonViewer)
+                            AppMenuBar, KwargsJsonViewer, GuiLogWindow)
 from acadia_gui import THEME_PATH
 
 import gc
@@ -55,7 +55,6 @@ class DataBrowser(QMainWindow):
         self.menu_bar = AppMenuBar(parent=self, apply_theme_callback=self.apply_theme)
         self.setMenuBar(self.menu_bar)
 
-
         # --- Main GUI components ---
         self.folder_tree = FolderTreeWidget(root_path, self.on_folder_selected)
         self.figure_display = FigureDisplayWidget()
@@ -73,10 +72,16 @@ class DataBrowser(QMainWindow):
         main_splitter.addWidget(right_splitter)
         main_splitter.setSizes([250, 1250])
 
+        # ---- log window ------------
+        self.log_window = GuiLogWindow(self)
+        self.log_window.setVisible(False)
+
         # --- Main layout ---
         central_widget = QWidget()
         central_layout = QVBoxLayout(central_widget)
         central_layout.addWidget(main_splitter)
+        central_layout.addWidget(self.log_window)
+        self.log_window.setFixedHeight(200)
         central_widget.setLayout(central_layout)
         self.setCentralWidget(central_widget)
 

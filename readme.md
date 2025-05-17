@@ -46,12 +46,9 @@ To generate live plotting, the Runtime class must define:
 
 ## Todos:
 ### Short term
-- update button
 - write msmt runtimes
   - qubit rotation function
   - generic faster sweeps
-
-
 
 - shell scripts for quick start
   - auto connection to existing client station? 

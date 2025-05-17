@@ -10,8 +10,17 @@ QStatusBar QLabel {
     font-weight: normal;
 }
 
+
+QTreeView {
+    show-decoration-selected: 1;
+    selection-color: white;
+}
 QTreeView::item:hover {
-    background-color: #dddddd;
+    background-color: #d9e9f3;
+}
+QTreeView::item:selected {
+    background-color: #308cc6;
+    color: white;
 }
 
 

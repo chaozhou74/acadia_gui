@@ -42,9 +42,11 @@ class AppMenuBar(QMenuBar):
 
         # === Menus ===
         self.theme_menu = self.addMenu("Theme")
+        self.view_menu = self.addMenu("View")
         self.help_menu = self.addMenu("Help")
 
         self.load_themes()
+        self.set_view_actions()
 
         # === Memory usage ===
         self.mem_label = QToolButton()
@@ -76,19 +78,13 @@ class AppMenuBar(QMenuBar):
         self.mem_timer.timeout.connect(self.update_memory_label)
         self.mem_timer.start(1000)
 
-        # === Right panel toggle button ===
+        # === Shortcut Right panel toggle button ===
         self.toggle_right_tabs_button = QToolButton()
         self.toggle_right_tabs_button.setIcon(QIcon.fromTheme(ICON_PATH+"/collapse_right_tabs.svg"))  # Placeholder icon
         self.toggle_right_tabs_button.setToolTip("Hide right panel")
         self.toggle_right_tabs_button.setCheckable(True)
         self.toggle_right_tabs_button.setChecked(False)
-
-        def toggle_right_panel(checked):
-            if self.parent_window:
-                self.parent_window.right_tabs.setVisible(not checked)
-                self.toggle_right_tabs_button.setToolTip("Show right panel" if checked else "Hide right panel")
-
-        self.toggle_right_tabs_button.toggled.connect(toggle_right_panel)
+        self.toggle_right_tabs_button.toggled.connect(lambda checked: self.toggle_right_panel(not checked))
 
         # Add button into the corner widget
         separator_line = QFrame()
@@ -104,7 +100,6 @@ class AppMenuBar(QMenuBar):
         self.setCornerWidget(corner_widget, Qt.TopRightCorner)
         corner_widget.adjustSize()
 
-
     def load_themes(self):
         self.theme_menu.clear()
         theme_dir = Path(THEME_PATH)
@@ -113,6 +108,7 @@ class AppMenuBar(QMenuBar):
                 action = QAction(file.stem, self)
                 action.triggered.connect(lambda _, name=file.name: self.apply_theme_callback(name))
                 self.theme_menu.addAction(action)
+
 
     def update_memory_label(self):
         mem_bytes = psutil.Process(os.getpid()).memory_info().rss
@@ -193,6 +189,30 @@ class AppMenuBar(QMenuBar):
             self.mem_popup.adjustSize()
             self.mem_popup.show()
 
+
+    def toggle_log_window(self,checked):
+        if self.parent_window:
+            self.parent_window.log_window.setVisible(checked)
+
+    def toggle_right_panel(self, checked):
+        if self.parent_window:
+            self.parent_window.right_tabs.setVisible(checked)
+            self.toggle_right_tabs_button.setToolTip("Show right panel" if checked else "Hide right panel")
+            self.toggle_right_tabs_button.setChecked(not checked) # also change the button looking when checked in menu
+            self.rt_info_action.setChecked(checked)
+
+
+    def _make_view_action(self, name, toggle_action, init_checked=True):
+        action = QAction(name, self)
+        action.setCheckable(True)
+        action.setChecked(init_checked)
+        self.view_menu.addAction(action)
+        action.toggled.connect(toggle_action)
+        return action
+
+    def set_view_actions(self):
+        self.show_log_action = self._make_view_action("GUI Log", self.toggle_log_window, init_checked=False)
+        self.rt_info_action = self._make_view_action("Runtime Info", self.toggle_right_panel)
 
 
 

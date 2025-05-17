@@ -24,7 +24,7 @@ from PyQt5.QtGui import QImage, QPainter, QFont, QIcon
 
 from acadia_qmsmt.helpers import load_runtime_from_data_dir
 from acadia_gui import AXS_SHAPE_TAG
-from acadia_gui.helpers import get_registered_plot_methods, get_data_process_method
+from acadia_gui.helpers import get_registered_plot_methods, get_data_process_method, get_registered_button_methods
 from acadia_gui.helpers.path_adapter import to_windows_path, detect_platform
 from acadia_gui.icons import ICON_PATH
 
@@ -85,6 +85,7 @@ def clear_layout(layout):
             item.widget().deleteLater()
         elif item.layout():
             clear_layout(item.layout())
+            item.layout().deleteLater()
 
 def format_pcm_coord(ax, x, y):
     """
@@ -146,6 +147,11 @@ def _prepare_pcm_edges(ax) -> bool:
     except Exception as e:
         return False
 
+def make_kwarg_box(title):
+    box = QGroupBox(title)
+    layout = QVBoxLayout()
+    box.setLayout(layout)
+    return box, layout
 
 class LivePlotWidget(QWidget):
     def __init__(self, poll_interval_sec=2, update_indicator_file=UPDATE_INDICATOR_FILE,
@@ -208,6 +214,22 @@ class LivePlotWidget(QWidget):
         self.plot_selector.currentIndexChanged.connect(self.select_plot)
         self.plot_selector.setMinimumWidth(5)
 
+
+
+        # --- Polling interval input ---
+        self.interval_input = QLineEdit(str(poll_interval_sec))
+        self.interval_input.setFixedWidth(30)
+        self.interval_input.setToolTip("Polling interval (in seconds)")
+        self.interval_input.editingFinished.connect(self.update_poll_interval)
+
+        self._pause_icon = QIcon(os.path.join(ICON_PATH, "pause_plot.svg"))
+        self._resume_icon = QIcon(os.path.join(ICON_PATH, "resume_plot.svg"))
+        self.pause_button = QToolButton()
+        self.pause_button.setIcon(self._pause_icon)
+        self.pause_button.setToolTip("Pause plotting")
+        self.pause_button.setIconSize(self.toolbar.iconSize())
+        self.pause_button.clicked.connect(self.toggle_pause)
+
         # --- Plot snapshot button -------
         self.snapshot_button = QToolButton()
         self.snapshot_button.setIcon(QIcon(os.path.join(ICON_PATH, "snapshot_plot.svg")))
@@ -219,22 +241,6 @@ class LivePlotWidget(QWidget):
         self.snapshot_button.clicked.connect(self.snapshot_current_plot)
         self.snapshot_button.setContextMenuPolicy(Qt.CustomContextMenu)
         self.snapshot_button.customContextMenuRequested.connect(self.show_snapshot_settings)
-
-
-        # --- Polling interval input ---
-        self._pause_icon = QIcon(os.path.join(ICON_PATH, "pause_plot.svg"))
-        self._resume_icon = QIcon(os.path.join(ICON_PATH, "resume_plot.svg"))
-        self.pause_button = QToolButton()
-        self.pause_button.setIcon(self._pause_icon)
-        self.pause_button.setToolTip("Pause plotting")
-        self.pause_button.setIconSize(self.toolbar.iconSize())
-        self.pause_button.clicked.connect(self.toggle_pause)
-
-
-        self.interval_input = QLineEdit(str(poll_interval_sec))
-        self.interval_input.setFixedWidth(30)
-        self.interval_input.setToolTip("Polling interval (in seconds)")
-        self.interval_input.editingFinished.connect(self.update_poll_interval)
 
         separator_line = QFrame()
         separator_line.setFrameShape(QFrame.VLine)
@@ -250,27 +256,21 @@ class LivePlotWidget(QWidget):
         interval_row.addWidget(self.pause_button)
         interval_row.addWidget(self.snapshot_button)
 
-        # --- Progress bar ---
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setMinimum(0)
-        self.progress_bar.setFormat("0/0")
-
 
         # --- Input regions for kwargs ---
-        self.process_kwargs_box = QGroupBox("Process kwargs")
-        self.process_kwargs_box.setFlat(False)
-        self.process_kwargs_layout = QVBoxLayout()
-        self.process_kwargs_box.setLayout(self.process_kwargs_layout)
-
-        self.plot_kwargs_box = QGroupBox("Plot kwargs")
-        self.plot_kwargs_box.setFlat(False)
-        self.plot_kwargs_layout = QVBoxLayout()
-        self.plot_kwargs_box.setLayout(self.plot_kwargs_layout)
+        self.process_kwargs_box, self.process_kwargs_layout = make_kwarg_box("Process kwargs")
+        self.plot_kwargs_box, self.plot_kwargs_layout = make_kwarg_box("Plot kwargs")
+        self.update_buttons_box, self.update_buttons_layout = make_kwarg_box("")
 
         kwargs_row = QVBoxLayout()
         kwargs_row.addWidget(self.process_kwargs_box)
         kwargs_row.addWidget(self.plot_kwargs_box)
+        kwargs_row.addWidget(self.update_buttons_box)
 
+        # --- Progress bar ---
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setMinimum(0)
+        self.progress_bar.setFormat("0/0")
 
         # --- Layout setup ---
         layout = QVBoxLayout(self)
@@ -278,8 +278,8 @@ class LivePlotWidget(QWidget):
         layout.addWidget(self.plot_selector)
         layout.addWidget(self.canvas, stretch=1)
         layout.addLayout(interval_row)
+        layout.addLayout(kwargs_row)
         layout.addWidget(self.progress_bar)
-        layout.insertLayout(layout.indexOf(self.progress_bar), kwargs_row)
         self.setLayout(layout)
 
         # --- Timer for update ---
@@ -312,6 +312,7 @@ class LivePlotWidget(QWidget):
             processor_func = getattr(self.rt, self.data_processor_name)
             self.process_inputs = self.create_inputs_from_signature(processor_func, self.process_kwargs_layout,
                                                                     self.process_kwargs_box)
+            self.update_buttons = self.create_update_buttons()
 
 
         # Set default plot
@@ -402,6 +403,8 @@ class LivePlotWidget(QWidget):
                 processor_func = getattr(self.rt, self.data_processor_name)
                 proc_kwargs = parse_inputs(self.process_inputs)
                 completed_iter = processor_func(**proc_kwargs)
+                self.refresh_update_button_methods()
+
             else:
                 self.progress_bar.setFormat(
                     f"Missing processor: {self.data_processor_name}"
@@ -493,22 +496,8 @@ class LivePlotWidget(QWidget):
             self.progress_bar.setFormat(f"{completed_iter}/{self.total_iter} | ETA error: {e}")
             logger.error(f"ETA error: {e}")
 
-    def set_theme(self, theme_name):
-        from matplotlib import style as mpl_style
-        from matplotlib import rcdefaults
-        rcdefaults()
-        if "dark" in theme_name.lower():
-            try:
-                import mplcyberpunk1
-                mpl_style.use("cyberpunk")
-            except ModuleNotFoundError:
-                mpl_style.use("dark_background")
-        else:
-            mpl_style.use("default")
 
-        self.update_plot(force=True)
-
-
+    # ----------- kwarg inputs ------------------------------------------
     def add_kwarg_input(self, row_layout: QHBoxLayout, label: str, default="", annotation=None):
         label_widget = QLabel(label)
         widget = None
@@ -585,6 +574,56 @@ class LivePlotWidget(QWidget):
 
         group_box.setVisible(bool(widgets))
         return widgets
+
+
+    # -------------- update buttons ---------------------------
+    def create_update_buttons(self):
+        """
+        create the update button layout
+        """
+        clear_layout(self.update_buttons_layout)
+        self.update_buttons_layout.setSpacing(4)
+        self.update_buttons_layout.setContentsMargins(2, 2, 2, 2)
+
+        # --- get registered button methods ---
+        self.update_button_registary = get_registered_button_methods(self.rt)
+        widgets = {}
+        row_layout = QHBoxLayout()
+        row_layout.setSpacing(4)
+        items_in_row = 0
+        max_items_per_row = 6
+
+        for button_name, method_name in self.update_button_registary.items():
+            widget = QToolButton()
+            widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            widget.setText(button_name)
+            row_layout.addWidget(widget)
+            widgets[button_name] = row_layout.itemAt(row_layout.count() - 1).widget()
+            items_in_row += 1
+            if items_in_row >= max_items_per_row:
+                self.update_buttons_layout.addLayout(row_layout)
+                row_layout = QHBoxLayout()
+                items_in_row = 0
+
+        if items_in_row > 0:
+            self.update_buttons_layout.addLayout(row_layout)
+
+        self.update_buttons_box.setVisible(bool(widgets))
+        return widgets
+
+    def refresh_update_button_methods(self):
+        """
+        reconnect the buttons to the bound methods of the updated rt
+        """
+        for button_name, method_name in self.update_button_registary.items():
+            update_method = getattr(self.rt, method_name)
+            button = self.update_buttons[button_name]
+            try:
+                # Disconnect all old slots (safe even if none connected)
+                button.clicked.disconnect()
+            except TypeError:
+                pass
+            button.clicked.connect(lambda checked=False, m=update_method: m())
 
 
     # ---------- right click options --------------------------
@@ -784,7 +823,6 @@ class LivePlotWidget(QWidget):
         layout.addWidget(label_, 4, 0)
         layout.addWidget(font_input, 4, 1)
 
-        widget.setLayout(layout)
 
         widget_action = QWidgetAction(menu)
         widget_action.setDefaultWidget(widget)
@@ -818,15 +856,33 @@ class LivePlotWidget(QWidget):
         # --- Show the menu just below the snapshot button ---
         menu.exec_(self.snapshot_button.mapToGlobal(QtCore.QPoint(0, self.snapshot_button.height())))
 
+    # --------- theme ------------
+    def set_theme(self, theme_name):
+        from matplotlib import style as mpl_style
+        from matplotlib import rcdefaults
+        rcdefaults()
+        if "dark" in theme_name.lower():
+            try:
+                import mplcyberpunk1
+                mpl_style.use("cyberpunk")
+            except ModuleNotFoundError:
+                mpl_style.use("dark_background")
+        else:
+            mpl_style.use("default")
+
+        self.update_plot(force=True)
+
     # ------------- clear -----------------
     def clear(self):
         self.stop()
 
         clear_layout(self.process_kwargs_layout)
         clear_layout(self.plot_kwargs_layout)
+        clear_layout(self.update_buttons_layout)
 
         self.process_inputs = {}
         self.plot_inputs = {}
+        self.update_buttons = {}
 
         # Reset dropdown and state
         self.plot_selector.clear()
@@ -850,8 +906,3 @@ class LivePlotWidget(QWidget):
 
         self.canvas.figure.clf()
         self.canvas.draw()
-
-
-
-
-    # fixme: add update button.

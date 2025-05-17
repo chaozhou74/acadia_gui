@@ -64,7 +64,7 @@ QToolButton[class="hoverFlat"]:hover {
 QToolButton {
     background-color: #555555;
     border: 1px solid #777777;
-    padding: 4px 6px;
+    padding: 1px;
     border-radius: 4px;
 }
 QToolButton:hover {
