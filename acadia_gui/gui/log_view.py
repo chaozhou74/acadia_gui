@@ -1,7 +1,10 @@
 import os
+import logging
 from PyQt5.QtWidgets import QTabWidget, QTextBrowser
 from PyQt5.QtGui import QTextCharFormat, QColor
 from PyQt5.QtCore import QTimer
+
+logger = logging.getLogger(__name__)
 
 log_files = ["remote_main.log", "runtime.log", "remote_stderr.log", "remote_stdout.log"]
 
@@ -48,6 +51,7 @@ class LogViewer(QTabWidget):
             self._insert_with_formatting(browser, lines)
         except Exception as e:
             browser.setPlainText(f"Error reading {fname}:\n{e}")
+            logger.error(e)
         self.file_mtimes[fname] = os.path.getmtime(full_path)
         self.addTab(browser, fname)
 
@@ -82,6 +86,7 @@ class LogViewer(QTabWidget):
             self._insert_with_formatting(browser, lines)
         except Exception as e:
             browser.setPlainText(f"Error reading {fname}:\n{e}")
+            logger.error(e)
 
         self.file_mtimes[fname] = os.path.getmtime(full_path)
 

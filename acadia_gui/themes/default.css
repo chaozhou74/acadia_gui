@@ -1,3 +1,4 @@
+/* ========== PLOT BACKGROUND ========== */
 QLabel#plotBackground {
     background-color: #FFFFFF;
     padding: 10px;
@@ -5,50 +6,38 @@ QLabel#plotBackground {
     border-radius: 4px;
 }
 
+#livePlotCanvas {
+    background-color: #fafafa;
+}
+
+
+/* ========== STATUS BAR ========== */
 QStatusBar QLabel {
     color: black;
     font-weight: normal;
 }
 
 
+/* ========== TREE VIEW ========== */
 QTreeView {
     show-decoration-selected: 1;
     selection-color: white;
 }
+
 QTreeView::item:hover {
     background-color: #d9e9f3;
 }
+
 QTreeView::item:selected {
     background-color: #308cc6;
-    color: white;
 }
 
 
-/*mpl background behind figure*/
-#livePlotCanvas {
-    background-color: #fafafa;
-}
-
-/* mpl tool widget */
+/* ========== TOOLBAR ========== */
 #livePlotToolBar {
     background-color: transparent;
 }
-QToolButton{
-    background-color: #fafafa;
-    border: 1px solid #999999;
-    padding: 1px;
-    border-radius: 4px;
-}
-QToolButton:hover {
-    background-color: #dddddd;
-    border-radius: 4px;
-}
-QToolButton:pressed {
-    background-color: #999999;
-}
-QToolButton:checked {
-    background-color: #888888;
-}
+
 QToolBar::separator {
     background-color: #dddddd;
     width: 1px;
@@ -63,12 +52,35 @@ QToolBar QLabel {
 }
 
 
-/* buttons that only show like a button on hover */
+/* ========== TOOL BUTTONS ========== */
+QToolButton {
+    background-color: #fafafa;
+    border: 1px solid #999999;
+    padding: 1px;
+    border-radius: 4px;
+}
+
+QToolButton:hover {
+    background-color: #dddddd;
+    border-radius: 4px;
+}
+
+QToolButton:pressed {
+    background-color: #999999;
+}
+
+QToolButton:checked {
+    background-color: #888888;
+}
+
+
+/* ========== HOVER-ONLY TOOL BUTTONS ========== */
 QToolButton[class="hoverFlat"] {
     background: transparent;
     border: none;
     color: black;
 }
+
 QToolButton[class="hoverFlat"]:hover {
     background-color: #dddddd;
     border: 1px solid #999999;
@@ -76,8 +88,7 @@ QToolButton[class="hoverFlat"]:hover {
 }
 
 
-
-
+/* ========== GROUP BOX ========== */
 QGroupBox {
     margin-top: 8px;
     border: 1px solid lightgray;
@@ -91,5 +102,3 @@ QGroupBox::title {
     padding: 0 6px;
     background-color: #f0f0f0;  /* optional: highlight title */
 }
-
-

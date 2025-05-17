@@ -32,7 +32,7 @@ from acadia_gui.icons import ICON_PATH
 UPDATE_INDICATOR_FILE = "metadata.txt" # file whose last modified time indicates the last data update
 CREATE_INDICATOR_FILE = "run.py" # file whose creation time indicates the experiment time
 
-logger = logging.getLogger("acadia_gui.live_plot")
+logger = logging.getLogger(__name__)
 
 def parse_inputs(input_dict):
     kwargs = {}
@@ -765,9 +765,9 @@ class LivePlotWidget(QWidget):
                     ['powershell.exe', '-ExecutionPolicy', 'Bypass', '-Command', powershell_script],
                     check=True
                 )
-                logger.info("Snapshot copied to Windows clipboard using PowerShell!")
+                logger.info(f"Snapshot {self.data_path}/{self.current_plot_name} copied to clipboard!")
             except Exception as e:
-                logger.error(f"Failed to copy to clipboard: {e}")
+                logger.error(f"Failed to copy snapshot to clipboard: {e}")
 
         # if on actual linux, we can just directly copy to clipboard.
         else:
@@ -775,7 +775,7 @@ class LivePlotWidget(QWidget):
             try:
                 clipboard = QApplication.clipboard()
                 clipboard.setImage(final_image)
-                logger.info("Snapshot copied to clipboard!")
+                logger.info(f"Snapshot {self.data_path}/{self.current_plot_name} copied to clipboard!")
             except Exception as e:
                 logger.error(f"Failed to copy snapshot to clipboard: {e}")
 

@@ -1,16 +1,19 @@
 import sys
+import logging
+import gc
+
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QMainWindow, QVBoxLayout, QSplitter,
     QTabWidget
 )
-from PyQt5.QtCore import Qt, QObject
+from PyQt5.QtCore import Qt
 
 from acadia_gui.gui import (LogViewer, InstrumentParamsViewer, YamlViewer,
                             FigureDisplayWidget, FolderTreeWidget, is_datafolder,
-                            AppMenuBar, KwargsJsonViewer, GuiLogWindow)
+                            AppMenuBar, KwargsJsonViewer, GuiLogWindow, GuiLogHandler)
 from acadia_gui import THEME_PATH
 
-import gc
+logger = logging.getLogger(__name__)
 
 def force_garbage_collect():
     collected = gc.collect()
@@ -43,9 +46,18 @@ class RightPanelTabs(QTabWidget):
 
 
 class DataBrowser(QMainWindow):
-    def __init__(self, root_path, client_station=None, theme:str="default"):
+    def __init__(self, root_path:str, client_station=None, theme:str="default", logging_level=logging.DEBUG):
+        """
+        Main data browser gui layout
+
+        :param root_path: Path to the root data folder.
+        :param client_station: Optional. A `instrumentserver.ClientStation` instance used to restore instrument
+            states from previously saved configurations in the data browser GUI.
+        :param theme: Name of the stylesheet theme to apply. Should correspond to a css file in `acadia_gui/themes`.
+        :param logging_level: Logging level for the global logger. It is recommended to set this to the lowest
+            level (e.g., DEBUG) and use log handlers within the GUI to filter messages as needed.
+        """
         # todo: add code view
-        # todo: add logger
 
         super().__init__()
         self.setWindowTitle("Data Browser")
@@ -75,15 +87,24 @@ class DataBrowser(QMainWindow):
         # ---- log window ------------
         self.log_window = GuiLogWindow(self)
         self.log_window.setVisible(False)
+        handler = GuiLogHandler(self.log_window)
+        self.log_window.set_handler(handler)  # Link back to allow filter updates
+        handler.setLevel(logging.INFO)
+        logging.getLogger().addHandler(handler)
+        logging.getLogger().setLevel(logging_level)
 
         # --- Main layout ---
+        outer_splitter = QSplitter(Qt.Vertical)
+        outer_splitter.addWidget(main_splitter)
+        outer_splitter.addWidget(self.log_window)
+        outer_splitter.setSizes([800, 200])  # Adjust as needed
+
         central_widget = QWidget()
         central_layout = QVBoxLayout(central_widget)
-        central_layout.addWidget(main_splitter)
-        central_layout.addWidget(self.log_window)
-        self.log_window.setFixedHeight(200)
+        central_layout.addWidget(outer_splitter)
         central_widget.setLayout(central_layout)
         self.setCentralWidget(central_widget)
+
 
         if theme is not None:
             self.apply_theme(theme)
@@ -121,7 +142,7 @@ class DataBrowser(QMainWindow):
             with open(theme_path, "r") as f:
                 self.setStyleSheet(f.read())
         except Exception as e:
-            print(f"Failed to apply theme {theme_name}: {e}")
+            logger.error(f"Failed to apply theme {theme_name}: {e}")
 
         # forward to central matplotlib plot
         self.figure_display.set_theme(theme_name)

@@ -99,7 +99,8 @@ class ResonatorSpectroscopyRuntime(QMsmtRuntime):
 
 
     @annotate_method(is_data_processor=True)
-    def process_current_data(self, e_delay:float=76E-9):
+    def process_current_data(self):
+        e_delay:float=76E-9
         # First make sure that we actually have new data to process
         if "points" not in self.data or len(self.data["points"]) < len(self.frequencies):
             return
@@ -115,12 +116,11 @@ class ResonatorSpectroscopyRuntime(QMsmtRuntime):
 
 
     @annotate_method(plot_name="mag_phase_vs_dac", axs_shape=(2,1))
-    def plot_data_iq(self, axs=None, apply_e_delay:bool=True, test1=1, test2: Literal[1, 3, "asgadf"]=1, test3=100000, test4="111111111111111"):
+    def plot_data_iq(self, axs=None):
         from acadia_gui.helpers import prepare_axes
         fig, axs = prepare_axes(axs, axs_shape=(2,1), figsize=self.figsize)
-        print(test1,test2)
 
-        data = self.avg_iq_corrected if apply_e_delay else self.avg_iq
+        data = self.avg_iq
         axs[0].plot(self.frequencies, np.abs(data))
         axs[1].plot(self.frequencies, np.angle(data, deg=True))
         axs[1].set_xlabel("Frequency [Hz]")
@@ -131,44 +131,110 @@ class ResonatorSpectroscopyRuntime(QMsmtRuntime):
 
         fig.tight_layout()
         return fig, axs
+    
+    @annotate_method(button_name="hello", disabled=False)
+    def test_print(self):
+        print("hi")
+        print(self.completed_iterations)
+    
+    @annotate_method(button_name="hello11111111111111111111", disabled=False)
+    def test_print1(self):
+        print("hi1")
+        print(self.completed_iterations)
 
-    @annotate_method(plot_name="mag_phase_vs_dac2", axs_shape=(2,1))
-    def plot_data_iq_2(self, axs=None, apply_e_delay:bool=True):
-        from acadia_gui.helpers import prepare_axes
-        fig, axs = prepare_axes(axs, axs_shape=(2,1), figsize=self.figsize)
+    @annotate_method(button_name="hello221111111", disabled=False)
+    def test_print2(self):
+        print("hi2")
+        print(self.completed_iterations)
 
-        data = self.avg_iq_corrected if apply_e_delay else self.avg_iq
-        axs[0].plot(self.frequencies, np.abs(data), color="C1")
-        axs[1].plot(self.frequencies, np.angle(data, deg=True))
-        axs[1].set_xlabel("Frequency [Hz]")
+    @annotate_method(button_name="hello3", disabled=False)
+    def test_print3(self):
+        print("hi3")
+        print(self.completed_iterations)
+    
 
-        axs[1].set_ylabel("Phase (deg)")
-        axs[0].set_ylabel("Mag (a.u.)")
-
-        fig.tight_layout()
-        return fig, axs
-
-    @annotate_method(plot_name="mag_phase_vs_dac3", axs_shape=(1,1))
-    def plot_data_iq_3(self, axs=None):
-        from acadia_gui.helpers import prepare_axes
-        fig, axs = prepare_axes(axs, axs_shape=(1,1), figsize=self.figsize)
-        data = self.avg_iq
-        axs.plot(self.frequencies, np.abs(data), color="C2")
-        axs.set_ylabel("Mag (a.u.)")
-
-        fig.tight_layout()
-        return fig, axs
+    @annotate_method(button_name="hello4", disabled=True)
+    def test_print4(self):
+        print("hi4")
+        print(self.completed_iterations)
+    
+    @annotate_method(button_name="hello5", disabled=False)
+    def test_print5(self):
+        print("hi5")
+        print(self.completed_iterations)
 
 
-    @annotate_method(plot_name="mag_phase_vs_dac4", axs_shape=(1,1))
-    def plot_data_iq_4(self, axs=None):
-        from acadia_gui.helpers import prepare_axes
-        fig, axs = prepare_axes(axs, axs_shape=(1,1), figsize=self.figsize)
-        iters = np.arange(len(self.data_iq))
-        pcm = axs.pcolormesh(iters, self.frequencies, np.angle(self.data_iq).T, vmin=-500, vmax=500)
-        fig.colorbar(pcm, ax=axs)
-        fig.tight_layout()
-        return fig, axs
+    # @annotate_method(is_data_processor=True)
+    # def process_current_data(self, e_delay:float=76E-9):
+    #     # First make sure that we actually have new data to process
+    #     if "points" not in self.data or len(self.data["points"]) < len(self.frequencies):
+    #         return
+    #     self.completed_iterations = len(self.data["points"]) // len(self.frequencies)
+    #     valid_points = self.completed_iterations * len(self.frequencies)
+
+    #     data = self.data["points"].records()[:valid_points, ...]
+    #     data = data.reshape(self.completed_iterations, len(self.frequencies), 2)
+    #     self.data_iq = data.astype(float).view(complex).squeeze()
+    #     self.avg_iq = np.mean(self.data_iq, axis=0)
+    #     self.avg_iq_corrected = self.avg_iq * np.exp(1j * self.frequencies * e_delay * np.pi * 2)
+    #     return self.completed_iterations
+
+
+    # @annotate_method(plot_name="mag_phase_vs_dac", axs_shape=(2,1))
+    # def plot_data_iq(self, axs=None, apply_e_delay:bool=True, test1=1, test2: Literal[1, 3, "asgadf"]=1, test3=100000, test4="111111111111111"):
+    #     from acadia_gui.helpers import prepare_axes
+    #     fig, axs = prepare_axes(axs, axs_shape=(2,1), figsize=self.figsize)
+    #     print(test1,test2)
+
+    #     data = self.avg_iq_corrected if apply_e_delay else self.avg_iq
+    #     axs[0].plot(self.frequencies, np.abs(data))
+    #     axs[1].plot(self.frequencies, np.angle(data, deg=True))
+    #     axs[1].set_xlabel("Frequency [Hz]")
+
+    #     axs[1].set_ylabel("Phase (deg)")
+    #     axs[1].set_ylim(-500,500)
+    #     axs[0].set_ylabel("Mag (a.u.)")
+
+    #     fig.tight_layout()
+    #     return fig, axs
+
+    # @annotate_method(plot_name="mag_phase_vs_dac2", axs_shape=(2,1))
+    # def plot_data_iq_2(self, axs=None, apply_e_delay:bool=True):
+    #     from acadia_gui.helpers import prepare_axes
+    #     fig, axs = prepare_axes(axs, axs_shape=(2,1), figsize=self.figsize)
+
+    #     data = self.avg_iq_corrected if apply_e_delay else self.avg_iq
+    #     axs[0].plot(self.frequencies, np.abs(data), color="C1")
+    #     axs[1].plot(self.frequencies, np.angle(data, deg=True))
+    #     axs[1].set_xlabel("Frequency [Hz]")
+
+    #     axs[1].set_ylabel("Phase (deg)")
+    #     axs[0].set_ylabel("Mag (a.u.)")
+
+    #     fig.tight_layout()
+    #     return fig, axs
+
+    # @annotate_method(plot_name="mag_phase_vs_dac3", axs_shape=(1,1))
+    # def plot_data_iq_3(self, axs=None):
+    #     from acadia_gui.helpers import prepare_axes
+    #     fig, axs = prepare_axes(axs, axs_shape=(1,1), figsize=self.figsize)
+    #     data = self.avg_iq
+    #     axs.plot(self.frequencies, np.abs(data), color="C2")
+    #     axs.set_ylabel("Mag (a.u.)")
+
+    #     fig.tight_layout()
+    #     return fig, axs
+
+
+    # @annotate_method(plot_name="mag_phase_vs_dac4", axs_shape=(1,1))
+    # def plot_data_iq_4(self, axs=None):
+    #     from acadia_gui.helpers import prepare_axes
+    #     fig, axs = prepare_axes(axs, axs_shape=(1,1), figsize=self.figsize)
+    #     iters = np.arange(len(self.data_iq))
+    #     pcm = axs.pcolormesh(iters, self.frequencies, np.angle(self.data_iq).T, vmin=-500, vmax=500)
+    #     fig.colorbar(pcm, ax=axs)
+    #     fig.tight_layout()
+    #     return fig, axs
 
 
     #

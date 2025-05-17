@@ -1,11 +1,13 @@
 import os
 import json
+import logging
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QTreeWidget, QTreeWidgetItem,
     QCheckBox, QPushButton, QLabel
 )
 
+logger = logging.getLogger(__name__)
 
 def load_inst_params(path):
     inst_file = os.path.join(path, "inst_params.json")
@@ -53,7 +55,7 @@ class InstrumentParamsViewer(QWidget):
         self.load_button.setEnabled(self.client_station is not None)
         self.layout.addWidget(self.load_button)
         if self.client_station is None:
-            self.load_button.setToolTip("No Instrument client station detected")
+            self.load_button.setToolTip("No Instrument client station found")
 
         self.setLayout(self.layout)
 
@@ -117,7 +119,7 @@ class InstrumentParamsViewer(QWidget):
         if not self.inst_data:
             return
         dd = {k: v for k, v in self.inst_data.items() if k in self.selected_instruments}
-        print("Loading parameters to instruments:", dd)
+        logger.info("!!! Loading parameters to instruments:", dd)
         self.client_station.set_parameters(dd)
 
     def clear(self):

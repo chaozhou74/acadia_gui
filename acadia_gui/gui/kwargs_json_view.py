@@ -1,5 +1,6 @@
 import os
 import json
+import logging
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QTreeWidget, QTreeWidgetItem,
     QMenu, QApplication
@@ -8,11 +9,11 @@ from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QKeySequence, QColor, QBrush
 import numpy as np
 import matplotlib.pyplot as plt
-import binascii
 from acadia.runtime import Runtime
 
 KWARGS_JSON_FILE = "kwargs.json"
 
+logger = logging.getLogger(__name__)
 
 # todo: this should actually be the base of all json file viewer
 
@@ -132,7 +133,7 @@ class KwargsJsonViewer(QWidget):
             try:
                 self._plot_array(selected.text(0), obj)
             except Exception as e:
-                print(f"Failed to plot ndarray: {e}")
+                logger.error(f"Failed to plot ndarray: {e}")
 
 
     def _flash_item(self, item):

@@ -2,6 +2,7 @@ import os
 import subprocess
 import shutil
 from functools import wraps
+import logging
 from PyQt5.QtWidgets import (QWidget, QFileSystemModel, QTreeView, QVBoxLayout,
                              QPushButton, QFileDialog, QMenu, QApplication, QHBoxLayout, QMessageBox)
 from PyQt5.QtCore import Qt, QModelIndex, QDir, QUrl, QSortFilterProxyModel
@@ -13,6 +14,8 @@ from acadia_gui.icons import ICON_PATH
 
 
 TRASH_FOLDER_NAME = "Trash"
+
+logger = logging.getLogger(__name__)
 
 def is_datafolder(path):
     """
@@ -221,7 +224,7 @@ class FolderTreeWidget(QWidget):
                 win_path = to_windows_path(path)
                 subprocess.Popen(["explorer.exe", win_path])
             except Exception as e:
-                print(f"Failed to open path in Explorer: {e}")
+                logger.error(f"Failed to open path in Explorer: {e}")
         else:
             QDesktopServices.openUrl(QUrl.fromLocalFile(path))
 
@@ -232,9 +235,9 @@ class FolderTreeWidget(QWidget):
         os.makedirs(trash_dir, exist_ok=True)
         try:
             shutil.move(path, trash_dir)
-            print(f"Moved {path} to {trash_dir}")
+            logger.info(f"Moved {path} to {trash_dir}")
         except Exception as e:
-            print(f"Failed to move {path} to trash: {e}")
+            logger.error(f"Failed to move {path} to trash: {e}")
 
     @update_explorer
     def handle_restore(self, path):
@@ -250,14 +253,14 @@ class FolderTreeWidget(QWidget):
 
         try:
             shutil.move(path, restore_path)
-            print(f"Restored {path} to {restore_path}")
+            logger.info(f"Restored {path} to {restore_path}")
         except Exception as e:
-            print(f"Failed to restore {path}: {e}")
+            logger.error(f"Failed to restore {path}: {e}")
 
     @update_explorer
     def handle_empty_trash(self, path):
         if not os.path.isdir(path):
-            print(f"Path {path} is not a directory")
+            logger.warning(f"Path {path} is not a directory")
             return
 
         # Count how many folders inside trash
@@ -275,9 +278,9 @@ class FolderTreeWidget(QWidget):
         if reply == QMessageBox.Yes:
             try:
                 shutil.rmtree(path)
-                print(f"Deleted trash folder {path}")
+                logger.info(f"Deleted trash folder {path}")
             except Exception as e:
-                print(f"Failed to delete trash folder {path}: {e}")
+                logger.error(f"Failed to delete trash folder {path}: {e}")
 
     def select_most_recent_folder(self):
         # todo: the sorting can be optimized, kind of slow currently

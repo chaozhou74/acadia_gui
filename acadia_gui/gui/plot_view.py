@@ -1,5 +1,6 @@
 import os
 import pickle
+import logging
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QComboBox, QPushButton, QStackedLayout, QHBoxLayout
 )
@@ -8,6 +9,7 @@ from PyQt5.QtCore import Qt
 
 from acadia_gui.gui.live_plot_widget import LivePlotWidget
 
+logger = logging.getLogger(__name__)
 
 class FigureDisplayWidget(QWidget):
     def __init__(self):
@@ -102,6 +104,7 @@ class FigureDisplayWidget(QWidget):
             except Exception as e:
                 self.stack.setCurrentIndex(0)
                 self.image_label.setText(f"Failed to load live plot: {e}")
+                logger.error(e)
 
 
     def show_selected_image(self, index):
@@ -131,7 +134,7 @@ class FigureDisplayWidget(QWidget):
         pkl_path = os.path.join(self.folder_path, base_name + ".pkl")
 
         if not os.path.isfile(pkl_path):
-            print(f"No .pkl file found for {base_name}")
+            logger.warning(f"No .pkl file found for {base_name}")
             return
 
         try:
@@ -140,9 +143,9 @@ class FigureDisplayWidget(QWidget):
             if hasattr(fig, "show"):
                 fig.show()
             else:
-                print("Pickled object is not a matplotlib figure.")
+                logger.error("Pickled object is not a matplotlib figure.")
         except Exception as e:
-            print(f"Failed to load or show .pkl: {e}")
+            logger.error(f"Failed to load or show .pkl: {e}")
 
     def set_theme(self, theme_name):
         self.live_plot.set_theme(theme_name)

@@ -1,10 +1,7 @@
 import psutil
 import os
 from pathlib import Path
-try:
-    from pympler import asizeof
-except ImportError:
-    asizeof = None
+import logging
 
 
 from PyQt5.QtWidgets import QMenuBar, QAction, QLabel, QApplication, QTextEdit, QWidget, QVBoxLayout, QFrame, QToolButton, QHBoxLayout
@@ -18,6 +15,14 @@ from acadia_gui.icons import ICON_PATH
 MEM_THRES_MEDIUM = 3 # threshold for medium memory usage, in GB
 MEM_THRES_HIGH = 10 # threshold for high memory usage, in GB
 
+logger = logging.getLogger(__name__)
+
+try:
+    from pympler import asizeof
+except ImportError:
+    asizeof = None
+    logger.warning("'pympler' module not found; python object memory usage is not shown. "
+                   "to enable, do: `pip install pympler`")
 
 def count_qobjects():
     app = QApplication.instance()
@@ -50,7 +55,7 @@ class AppMenuBar(QMenuBar):
 
         # === Memory usage ===
         self.mem_label = QToolButton()
-        self.mem_label.setText("Memory Usage: -- GB") # todo: styling
+        self.mem_label.setText("Memory Usage: -- GB")
         self.mem_label.clicked.connect(self.toggle_memory_popup)
         self.mem_label.setProperty("class", "hoverFlat")
 
