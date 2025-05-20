@@ -1,0 +1,7 @@
+{
+  "init_instruments": "instruments.yaml",
+  "param_path": "ins_params.json",
+  "host": "10.66.152.190",
+  "port": "5560",
+  "timeout": 600
+}

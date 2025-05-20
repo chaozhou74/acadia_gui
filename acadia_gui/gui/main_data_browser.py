@@ -149,6 +149,8 @@ class DataBrowser(QMainWindow):
 
 
 if __name__ == "__main__":
+    # example code for starting the main data browser gui app window
+
     from acadia_gui.examples.instrument_client.ins_client import make_client_station
     # inst_station = make_client_station() # for setting instrument parameters from gui
     inst_station = None

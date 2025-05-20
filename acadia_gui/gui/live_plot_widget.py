@@ -28,9 +28,12 @@ from acadia_gui.helpers import get_registered_plot_methods, get_data_process_met
 from acadia_gui.helpers.path_adapter import to_windows_path, detect_platform
 from acadia_gui.icons import ICON_PATH
 
+
 # files used for rough estimate of progress rate, ETA, etc
 UPDATE_INDICATOR_FILE = "metadata.txt" # file whose last modified time indicates the last data update
 CREATE_INDICATOR_FILE = "run.py" # file whose creation time indicates the experiment time
+
+TOTAL_ITER_ATTRIBUTE = "iterations" # runtime class attribute that defines the total number of iterations
 
 logger = logging.getLogger(__name__)
 
@@ -218,7 +221,7 @@ class LivePlotWidget(QWidget):
 
         # --- Polling interval input ---
         self.interval_input = QLineEdit(str(poll_interval_sec))
-        self.interval_input.setFixedWidth(30)
+        self.interval_input.setFixedWidth(35)
         self.interval_input.setToolTip("Polling interval (in seconds)")
         self.interval_input.editingFinished.connect(self.update_poll_interval)
 
@@ -295,8 +298,13 @@ class LivePlotWidget(QWidget):
         self.last_mtime = 0
         self.rt = load_runtime_from_data_dir(self.data_path)
 
-        self.total_iter =  getattr(self.rt, "iterations", 1)
-        self.progress_bar.setMaximum(self.total_iter)
+        self.total_iter =  getattr(self.rt, TOTAL_ITER_ATTRIBUTE, None)
+        if self.total_iter is None:
+            logger.warning(f"total iteration attribute `{TOTAL_ITER_ATTRIBUTE}` not found in runtime class {self.rt}"
+                           f"The ETA is disabled")
+            self.progress_bar.setMaximum(1)
+        else:
+            self.progress_bar.setMaximum(self.total_iter)
 
         # Get all registered plots and populate dropdown
         self.plot_registry = get_registered_plot_methods(self.rt)
@@ -393,7 +401,9 @@ class LivePlotWidget(QWidget):
             self.last_mtime = current_mtime
 
             # Clear and load runtime and process current data
-            # need to reload runtime because that's how data got updated
+            # need to reload runtime because that's how rt.data got updated
+            # todo: can probably update rt.data without having to reload the rt object. But then we have to
+            #  manually give that to rt.data, which requires rt to always store the datamanager object in rt.data
             self.canvas.figure.clf()
             gc.collect()
             self.rt = load_runtime_from_data_dir(self.data_path)
@@ -473,12 +483,15 @@ class LivePlotWidget(QWidget):
             elapsed = last_update_time - start_time
 
             if elapsed > 1e-3 and completed_iter > 0:
-                rate = completed_iter / elapsed  # iterations per second
-                remaining_iter = self.total_iter - completed_iter
-                remaining = remaining_iter / rate if rate > 0 else float("inf")
-
                 elapsed_str = time.strftime('%H:%M:%S', time.gmtime(elapsed))
-                remaining_str = time.strftime('%H:%M:%S', time.gmtime(remaining))
+                rate = completed_iter / elapsed  # iterations per second
+                if self.total_iter is not None:
+                    remaining_iter = self.total_iter - completed_iter
+                    remaining = remaining_iter / rate if rate > 0 else float("inf")
+                    remaining_str = time.strftime('%H:%M:%S', time.gmtime(remaining))
+                else:
+                    remaining_str = "?"
+
                 time_per_iter_ms = 1 / rate * 1000
                 if time_per_iter_ms > 1000:
                     rate_str = f"{time_per_iter_ms / 1000:.2f} s/it"

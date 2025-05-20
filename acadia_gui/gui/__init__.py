@@ -6,3 +6,4 @@ from .data_folder_view import FolderTreeWidget, is_datafolder
 from .top_menubar import AppMenuBar
 from .kwargs_json_view import KwargsJsonViewer
 from .gui_log_window import GuiLogWindow, GuiLogHandler
+from .main_data_browser import DataBrowser
