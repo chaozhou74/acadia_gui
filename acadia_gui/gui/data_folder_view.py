@@ -10,7 +10,7 @@ from PyQt5.QtGui import QIcon, QDesktopServices
 
 
 from acadia_gui.helpers import detect_platform, to_windows_path
-from acadia_gui.icons import ICON_PATH
+from acadia_gui.icons import get_icon
 
 
 TRASH_FOLDER_NAME = "Trash"
@@ -33,7 +33,7 @@ class DataFolderModel(QFileSystemModel):
 
         if self.trash_icon.isNull():
             # fallback to a local icon
-            self.trash_icon = QIcon(os.path.join(ICON_PATH, "trash_bin.svg"))  # <- your own icon
+            self.trash_icon = QIcon(get_icon("trash_bin.svg"))  # <- your own icon
 
 
     def data(self, index: QModelIndex, role: int = Qt.DisplayRole):
@@ -122,19 +122,26 @@ class FolderTreeWidget(QWidget):
         self.select_button = QPushButton("Select Root Folder")
         self.select_button.clicked.connect(self.select_new_root)
 
-        self.recent_button = QPushButton(QIcon(os.path.join(ICON_PATH, "most_recent_folder.svg")), "")
+        self.recent_button = QPushButton(QIcon(get_icon("most_recent_folder.svg")), "")
         self.recent_button.setToolTip("Select most recent data folder")
         self.recent_button.clicked.connect(self.select_most_recent_folder)
 
-        self.sort_mtime_button = QPushButton(QIcon(os.path.join(ICON_PATH, "sort_by_time.svg")), "")
+        self.sort_mtime_button = QPushButton(QIcon(get_icon("sort_by_time.svg")), "")
         self.sort_mtime_button.setToolTip("Sort folders by modification time")
         self.sort_mtime_button.clicked.connect(self.sort_by_mtime)
         self.current_sort_order = Qt.DescendingOrder
 
+        self.refresh_button = QPushButton(QIcon(get_icon("refresh.svg")), "")
+        self.refresh_button.setToolTip("Refresh folders")
+        self.refresh_button.clicked.connect(self.refresh_model)
+
+
         button_row = QHBoxLayout()
         button_row.addWidget(self.select_button)
+        button_row.addWidget(self.refresh_button)
         button_row.addWidget(self.recent_button)
         button_row.addWidget(self.sort_mtime_button)
+
 
         layout = QVBoxLayout(self)
         layout.addLayout(button_row)
@@ -144,6 +151,11 @@ class FolderTreeWidget(QWidget):
         self.tree.customContextMenuRequested.connect(self.open_context_menu)
         # self.model.directoryLoaded.connect(lambda _: self.tree.sortByColumn(3, Qt.DescendingOrder))
 
+    def refresh_model(self):
+        # this effectively tells the model to "look again"
+        self.model.setRootPath("")  # reset
+        self.model.setRootPath(self.root_path)
+        self.tree.setRootIndex(self.proxy_model.mapFromSource(self.model.index(self.root_path)))
 
     def source_path_from_proxy_index(self, proxy_index: QModelIndex) -> str:
         source_index = self.proxy_model.mapToSource(proxy_index)

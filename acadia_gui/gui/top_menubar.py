@@ -10,7 +10,7 @@ from PyQt5.QtGui import QIcon
 
 
 from acadia_gui import THEME_PATH
-from acadia_gui.icons import ICON_PATH
+from acadia_gui.icons import get_icon
 
 MEM_THRES_MEDIUM = 3 # threshold for medium memory usage, in GB
 MEM_THRES_HIGH = 10 # threshold for high memory usage, in GB
@@ -85,7 +85,7 @@ class AppMenuBar(QMenuBar):
 
         # === Shortcut Right panel toggle button ===
         self.toggle_right_tabs_button = QToolButton()
-        self.toggle_right_tabs_button.setIcon(QIcon.fromTheme(ICON_PATH+"/collapse_right_tabs.svg"))  # Placeholder icon
+        self.toggle_right_tabs_button.setIcon(QIcon.fromTheme(get_icon("collapse_right_tabs.svg")))
         self.toggle_right_tabs_button.setToolTip("Hide right panel")
         self.toggle_right_tabs_button.setCheckable(True)
         self.toggle_right_tabs_button.setChecked(False)

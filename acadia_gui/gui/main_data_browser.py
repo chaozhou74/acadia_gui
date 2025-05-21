@@ -12,6 +12,7 @@ from acadia_gui.gui import (LogViewer, InstrumentParamsViewer, YamlViewer,
                             FigureDisplayWidget, FolderTreeWidget, is_datafolder,
                             AppMenuBar, KwargsJsonViewer, GuiLogWindow, GuiLogHandler)
 from acadia_gui import THEME_PATH
+from acadia_gui.icons import ICON_PATH
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +141,10 @@ class DataBrowser(QMainWindow):
             if theme_path.suffix != '.css':
                 theme_path = theme_path.with_suffix('.css')
             with open(theme_path, "r") as f:
-                self.setStyleSheet(f.read())
+                qss = f.read()
+                # Replace placeholder with an absolute path to your icon folder
+                qss = qss.replace("__ICON_PATH__", ICON_PATH)
+                self.setStyleSheet(qss)
         except Exception as e:
             logger.error(f"Failed to apply theme {theme_name}: {e}")
 

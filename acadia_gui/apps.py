@@ -8,7 +8,7 @@ from PyQt5.QtWidgets import QApplication
 from acadia_gui.gui import DataBrowser
 
 logger = logging.getLogger("__name__")
-def acadia_gui(root_path:str = None, instrument_station=None):
+def acadia_gui(root_path:str = None, instrument_station=None, dark_mode=False):
     """
     start the main acadia data browser gui
     :param root_path: path to the root data directory, default to the home directory
@@ -21,7 +21,7 @@ def acadia_gui(root_path:str = None, instrument_station=None):
     else:
         root_path = str(root_path)
     app = QApplication(sys.argv)
-    window = DataBrowser(root_path, instrument_station)
+    window = DataBrowser(root_path, instrument_station, theme="dark" if dark_mode else "default")
     window.show()
     sys.exit(app.exec_())
 
@@ -38,6 +38,7 @@ def acadia_gui_cli():
         -r, --root_path: Optional. Path to the root data directory. Defaults to the user's home directory.
         -s, --station_config: Optional. Path to a JSON file specifying the instrument client station
                               initialization parameters. See `examples/instrument_client/ins_client_params.json`.
+        -d, --dark: Optional. When present, enables dark mode at start.
 
     """
     parser = argparse.ArgumentParser()
@@ -48,6 +49,9 @@ def acadia_gui_cli():
     # for starting gui with a client instrument station, a JSON file that contains the station init
     # parameters must be provided. Check `examples/instrument_client/ins_client_params.json` for an example
     parser.add_argument('-s', '--station_config', type=Path, default=None)
+
+    # use dark mode at start
+    parser.add_argument('-d', '--dark', action='store_true', help='Enable dark mode')
 
     args = parser.parse_args()
 
@@ -70,7 +74,7 @@ def acadia_gui_cli():
     else:
         client_station = None
 
-    acadia_gui(root_path=args.root_path, instrument_station=client_station)
+    acadia_gui(root_path=args.root_path, instrument_station=client_station, dark_mode=args.dark)
 
 
 

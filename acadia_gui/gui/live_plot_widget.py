@@ -26,7 +26,7 @@ from acadia_qmsmt.helpers import load_runtime_from_data_dir
 from acadia_gui import AXS_SHAPE_TAG
 from acadia_gui.helpers import get_registered_plot_methods, get_data_process_method, get_registered_button_methods
 from acadia_gui.helpers.path_adapter import to_windows_path, detect_platform
-from acadia_gui.icons import ICON_PATH
+from acadia_gui.icons import get_icon
 
 
 # files used for rough estimate of progress rate, ETA, etc
@@ -225,8 +225,8 @@ class LivePlotWidget(QWidget):
         self.interval_input.setToolTip("Polling interval (in seconds)")
         self.interval_input.editingFinished.connect(self.update_poll_interval)
 
-        self._pause_icon = QIcon(os.path.join(ICON_PATH, "pause_plot.svg"))
-        self._resume_icon = QIcon(os.path.join(ICON_PATH, "resume_plot.svg"))
+        self._pause_icon = QIcon(get_icon("pause_plot.svg"))
+        self._resume_icon = QIcon(get_icon("resume_plot.svg"))
         self.pause_button = QToolButton()
         self.pause_button.setIcon(self._pause_icon)
         self.pause_button.setToolTip("Pause plotting")
@@ -235,7 +235,7 @@ class LivePlotWidget(QWidget):
 
         # --- Plot snapshot button -------
         self.snapshot_button = QToolButton()
-        self.snapshot_button.setIcon(QIcon(os.path.join(ICON_PATH, "snapshot_plot.svg")))
+        self.snapshot_button.setIcon(QIcon(get_icon("snapshot_plot.svg")))
         self.snapshot_button.setToolTip("Snapshot plot\n"
                                         "Create a high-DPI figure and scale it down\n"
                                         "for easier fitting in notebooks.\n"

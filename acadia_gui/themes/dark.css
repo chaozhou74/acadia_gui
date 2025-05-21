@@ -123,7 +123,7 @@ QCheckBox::indicator {
 }
 
 QCheckBox::indicator:checked {
-    image: url(../icons/blue_checkmark.svg);
+    image: url(__ICON_PATH__/blue_checkmark.svg); /* __ICON_PATH__ will be replaced with the actual path at loading time */
     border: 1px solid #666;
 }
 QCheckBox::indicator:hover,
