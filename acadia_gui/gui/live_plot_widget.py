@@ -22,7 +22,7 @@ from PyQt5.QtCore import QTimer, Qt, QSize
 from PyQt5 import QtCore, QtGui
 from PyQt5.QtGui import QImage, QPainter, QFont, QIcon
 
-from acadia_qmsmt.helpers import load_runtime_from_data_dir
+from acadia_qmsmt.helpers.saved_runtime_loader import insert_saved_qmsmt_module, get_saved_runtime_class
 from acadia_gui import AXS_SHAPE_TAG
 from acadia_gui.helpers import get_registered_plot_methods, get_data_process_method, get_registered_button_methods
 from acadia_gui.helpers.path_adapter import to_windows_path, detect_platform
@@ -296,7 +296,12 @@ class LivePlotWidget(QWidget):
         self.folder_label.setText(data_path)
         self.is_paused = False
         self.last_mtime = 0
-        self.rt = load_runtime_from_data_dir(self.data_path)
+
+        # Load the saved acadia_qmsmt.py as the acadia_qmsmt.qmsmt submodule
+        insert_saved_qmsmt_module(data_path)
+        # Get the saved runtime class and load runtime
+        self.runtime_class = get_saved_runtime_class(data_path)
+        self.rt = self.runtime_class.load(self.data_path)
 
         self.total_iter =  getattr(self.rt, TOTAL_ITER_ATTRIBUTE, None)
         if self.total_iter is None:
@@ -406,7 +411,7 @@ class LivePlotWidget(QWidget):
             #  manually give that to rt.data, which requires rt to always store the datamanager object in rt.data
             self.canvas.figure.clf()
             gc.collect()
-            self.rt = load_runtime_from_data_dir(self.data_path)
+            self.rt = self.runtime_class.load(self.data_path)
 
             completed_iter = None
             if hasattr(self.rt, self.data_processor_name):
@@ -910,6 +915,7 @@ class LivePlotWidget(QWidget):
         # Also clear these for sanity
         self.data_path = None
         self.rt = None
+        self.runtime_class = None
         self.data_processor_name = None
 
         self.ready = False

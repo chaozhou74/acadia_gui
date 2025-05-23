@@ -90,14 +90,14 @@ class ResonatorSpectroscopyRuntime(QMsmtRuntime):
 
     def finalize(self):
         super().finalize()
-        from acadia_gui.helpers import save_registered_plots
         if self.plot:
+            from acadia_qmsmt.helpers.plot_utils import save_registered_plots
             save_registered_plots(self)
 
 
     @annotate_method(is_data_processor=True)
     def process_current_data(self, e_delay:float=76E-9, auto_edelay:bool=False):
-        from acadia_test.helpers.general_plotter import reshape_iq_data_by_axes
+        from acadia_qmsmt.analysis import reshape_iq_data_by_axes
         data_spec = reshape_iq_data_by_axes(self.data["points"].records(), self.frequencies)
         if data_spec is None:
             return
@@ -108,11 +108,11 @@ class ResonatorSpectroscopyRuntime(QMsmtRuntime):
 
         if auto_edelay:
             from numpy import polyfit
-            k, b = polyfit(self.frequencies, np.angle(self.avg_iq), deg=1)
+            k, b = polyfit(self.frequencies, np.unwrap(np.angle(self.avg_iq)), deg=1)
             e_delay = k / np.pi / 2
         self.avg_iq_corrected = self.avg_iq * np.exp(1j * self.frequencies * e_delay * np.pi * 2)
 
-        from acadia_test.processing.fitting.lorentzian import Lorentzian
+        from acadia_qmsmt.analysis.fitting.lorentzian import Lorentzian
         self.fit = Lorentzian(self.frequencies, np.abs(self.avg_iq))
         self.fitted_f0 = self.fit.ufloat_results["x0"]
         self.e_delay_applied = e_delay
@@ -122,7 +122,7 @@ class ResonatorSpectroscopyRuntime(QMsmtRuntime):
 
     @annotate_method(plot_name="mag_phase_vs_dac", axs_shape=(2,1))
     def plot_data_iq(self, axs=None, apply_e_delay:bool=True):
-        from acadia_gui.helpers import prepare_axes
+        from acadia_qmsmt.helpers.plot_utils import prepare_axes
         fig, axs = prepare_axes(axs, axs_shape=(2,1), figsize=self.figsize)
 
         data = self.avg_iq_corrected if apply_e_delay else self.avg_iq

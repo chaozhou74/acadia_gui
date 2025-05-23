@@ -3,7 +3,7 @@ from matplotlib import pyplot as plt
 from acadia_gui.helpers import to_local_path
 from acadia_qmsmt.helpers import load_runtime_from_data_dir
 
-data_path = r"\\wsl.localhost\Ubuntu\home\chao\Data\test_gui\AmpSweep\new_annoatation\250416_012401\\"
+data_path = r"/home/chao/Data/test/ReadoutSpec2/250522_235104/"
 
 rt = load_runtime_from_data_dir(to_local_path(data_path))
 
