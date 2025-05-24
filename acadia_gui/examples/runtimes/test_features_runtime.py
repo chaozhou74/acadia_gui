@@ -92,7 +92,7 @@ class ResonatorSpectroscopyRuntime(QMsmtRuntime):
 
     def finalize(self):
         super().finalize()
-        from acadia_gui.helpers import save_registered_plots
+        from acadia_qmsmt.plotting import save_registered_plots
         if self.plot:
             save_registered_plots(self)
 
@@ -116,8 +116,8 @@ class ResonatorSpectroscopyRuntime(QMsmtRuntime):
 
     @annotate_method(plot_name="mag_phase_vs_dac", axs_shape=(2,1))
     def plot_data_iq(self, axs=None):
-        from acadia_gui.helpers import prepare_axes
-        fig, axs = prepare_axes(axs, axs_shape=(2,1), figsize=self.figsize)
+        from acadia_qmsmt.plotting import prepare_plot_axes
+        fig, axs = prepare_plot_axes(axs, axs_shape=(2,1), figsize=self.figsize)
 
         data = self.avg_iq
         axs[0].plot(self.frequencies, np.abs(data))
@@ -181,8 +181,8 @@ class ResonatorSpectroscopyRuntime(QMsmtRuntime):
 
     # @annotate_method(plot_name="mag_phase_vs_dac", axs_shape=(2,1))
     # def plot_data_iq(self, axs=None, apply_e_delay:bool=True, test1=1, test2: Literal[1, 3, "asgadf"]=1, test3=100000, test4="111111111111111"):
-    #     from acadia_gui.helpers import prepare_axes
-    #     fig, axs = prepare_axes(axs, axs_shape=(2,1), figsize=self.figsize)
+    #     from acadia_qmsmt.plotting import prepare_plot_axes
+    #     fig, axs = prepare_plot_axes(axs, axs_shape=(2,1), figsize=self.figsize)
     #     print(test1,test2)
 
     #     data = self.avg_iq_corrected if apply_e_delay else self.avg_iq
@@ -199,8 +199,8 @@ class ResonatorSpectroscopyRuntime(QMsmtRuntime):
 
     # @annotate_method(plot_name="mag_phase_vs_dac2", axs_shape=(2,1))
     # def plot_data_iq_2(self, axs=None, apply_e_delay:bool=True):
-    #     from acadia_gui.helpers import prepare_axes
-    #     fig, axs = prepare_axes(axs, axs_shape=(2,1), figsize=self.figsize)
+    #     from acadia_qmsmt.plotting import prepare_plot_axes
+    #     fig, axs = prepare_plot_axes(axs, axs_shape=(2,1), figsize=self.figsize)
 
     #     data = self.avg_iq_corrected if apply_e_delay else self.avg_iq
     #     axs[0].plot(self.frequencies, np.abs(data), color="C1")
@@ -215,8 +215,8 @@ class ResonatorSpectroscopyRuntime(QMsmtRuntime):
 
     # @annotate_method(plot_name="mag_phase_vs_dac3", axs_shape=(1,1))
     # def plot_data_iq_3(self, axs=None):
-    #     from acadia_gui.helpers import prepare_axes
-    #     fig, axs = prepare_axes(axs, axs_shape=(1,1), figsize=self.figsize)
+    #     from acadia_qmsmt.plotting import prepare_plot_axes
+    #     fig, axs = prepare_plot_axes(axs, axs_shape=(1,1), figsize=self.figsize)
     #     data = self.avg_iq
     #     axs.plot(self.frequencies, np.abs(data), color="C2")
     #     axs.set_ylabel("Mag (a.u.)")
@@ -227,8 +227,8 @@ class ResonatorSpectroscopyRuntime(QMsmtRuntime):
 
     # @annotate_method(plot_name="mag_phase_vs_dac4", axs_shape=(1,1))
     # def plot_data_iq_4(self, axs=None):
-    #     from acadia_gui.helpers import prepare_axes
-    #     fig, axs = prepare_axes(axs, axs_shape=(1,1), figsize=self.figsize)
+    #     from acadia_qmsmt.plotting import prepare_plot_axes
+    #     fig, axs = prepare_plot_axes(axs, axs_shape=(1,1), figsize=self.figsize)
     #     iters = np.arange(len(self.data_iq))
     #     pcm = axs.pcolormesh(iters, self.frequencies, np.angle(self.data_iq).T, vmin=-500, vmax=500)
     #     fig.colorbar(pcm, ax=axs)
@@ -399,7 +399,7 @@ class ResonatorSpectroscopyRuntime(QMsmtRuntime):
     #     from acadia_qmsmt.analysis import population_in_quadrant
     #     from acadia_qmsmt.analysis.fitting import rotate_iq
     #     from acadia_qmsmt.analysis.fitting.lorentzian import Lorentzian
-    #     from acadia_qmsmt.helpers.plot_utils import add_button
+    #     from acadia_qmsmt.plotting.utils import add_button
     #     from acadia_qmsmt.helpers.yaml_editor import update_yaml
     #
     #     fit = Lorentzian(self.frequencies, np.abs(self.data_complex))

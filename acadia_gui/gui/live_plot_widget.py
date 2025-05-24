@@ -23,8 +23,9 @@ from PyQt5 import QtCore, QtGui
 from PyQt5.QtGui import QImage, QPainter, QFont, QIcon
 
 from acadia_qmsmt.helpers.saved_runtime_loader import insert_saved_qmsmt_module, get_saved_runtime_class
-from acadia_gui import AXS_SHAPE_TAG
-from acadia_gui.helpers import get_registered_plot_methods, get_data_process_method, get_registered_button_methods
+from acadia_qmsmt.helpers import get_registered_plot_methods, get_data_process_method, get_registered_button_methods
+from acadia_qmsmt.helpers.annotation import AXS_SHAPE_TAG
+
 from acadia_gui.helpers.path_adapter import to_windows_path, detect_platform
 from acadia_gui.icons import get_icon
 
@@ -417,13 +418,18 @@ class LivePlotWidget(QWidget):
             if hasattr(self.rt, self.data_processor_name):
                 processor_func = getattr(self.rt, self.data_processor_name)
                 proc_kwargs = parse_inputs(self.process_inputs)
-                completed_iter = processor_func(**proc_kwargs)
+                try:
+                    completed_iter = processor_func(**proc_kwargs)
+                except Exception as e:
+                    logger.error(f"Error in data processing funciton "
+                                 f"`{self.runtime_class.__name__}.{self.data_processor_name}`: {e}")
                 self.refresh_update_button_methods()
 
             else:
                 self.progress_bar.setFormat(
                     f"Missing processor: {self.data_processor_name}"
                 )
+                logger.error(f"Missing data processor: {self.data_processor_name} in {self.runtime_class.__name__}")
                 return
 
             # Get selected plot method
@@ -635,13 +641,20 @@ class LivePlotWidget(QWidget):
         """
         for button_name, method_name in self.update_button_registary.items():
             update_method = getattr(self.rt, method_name)
+
+            def _update_method_try():
+                try:
+                    update_method()
+                except Exception as e:
+                    logger.error(e)
+
             button = self.update_buttons[button_name]
             try:
                 # Disconnect all old slots (safe even if none connected)
                 button.clicked.disconnect()
             except TypeError:
                 pass
-            button.clicked.connect(lambda checked=False, m=update_method: m())
+            button.clicked.connect(_update_method_try)
 
 
     # ---------- right click options --------------------------

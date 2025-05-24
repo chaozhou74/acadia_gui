@@ -80,7 +80,7 @@ class TestAmpSweepRuntime(QMsmtRuntime):
 
     def finalize(self):
         super().finalize()
-        from acadia_gui.helpers import save_registered_plots
+        from acadia_qmsmt.plotting import save_registered_plots
         if self.plot:
             save_registered_plots(self)
 
@@ -116,8 +116,8 @@ class TestAmpSweepRuntime(QMsmtRuntime):
 
     @annotate_method(plot_name="iq_vs_dac", axs_shape=(2,1))
     def plot_data_iq(self, axs=None):
-        from acadia_gui.helpers import prepare_axes
-        fig, axs = prepare_axes(axs, axs_shape=(2,1), figsize=self.figsize)
+        from acadia_qmsmt.plotting import prepare_plot_axes
+        fig, axs = prepare_plot_axes(axs, axs_shape=(2,1), figsize=self.figsize)
         axs[0].plot(self.amplitudes, self.avg_iq.real)
         axs[1].plot(self.amplitudes, self.avg_iq.imag)
         fig.tight_layout()
