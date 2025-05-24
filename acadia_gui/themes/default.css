@@ -73,6 +73,28 @@ QToolButton:checked {
     background-color: #888888;
 }
 
+/* ------ stop button ---------- */
+QToolButton#stop_button {
+    /*background-color: #f14f4f;*/
+    background-color: #f05555;
+    color: white;
+    border: 1px solid #999;
+    padding: 1px;
+    border-radius: 6px;
+    font-weight: bold;
+}
+
+QToolButton#stop_button:hover {
+    background-color: #ff0000;
+}
+
+/* Disabled STOP button */
+QToolButton#stop_button:disabled {
+    background-color: #efb9b9;
+    color: #666;
+    border: 1px solid #aaa;
+}
+
 
 /* ========== HOVER-ONLY TOOL BUTTONS ========== */
 QToolButton[class="hoverFlat"] {

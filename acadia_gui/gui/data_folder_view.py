@@ -14,6 +14,7 @@ from acadia_gui.icons import get_icon
 
 
 TRASH_FOLDER_NAME = "Trash"
+DATAFOLDER_INDICATOR_FILE = "run.py" # indicates an Acadia data folder
 
 logger = logging.getLogger(__name__)
 
@@ -21,9 +22,7 @@ def is_datafolder(path):
     """
     check if a path is a data folder by looking for "run.py" in the folder
     """
-    return os.path.isfile(os.path.join(path, "run.py"))
-
-
+    return os.path.isfile(os.path.join(path, DATAFOLDER_INDICATOR_FILE))
 
 class DataFolderModel(QFileSystemModel):
     def __init__(self, parent=None):
@@ -302,7 +301,8 @@ class FolderTreeWidget(QWidget):
 
         for dirpath, dirnames, filenames in os.walk(root_path):
             if is_datafolder(dirpath):
-                mtime = os.path.getmtime(dirpath)
+                run_path = os.path.join(dirpath, DATAFOLDER_INDICATOR_FILE)
+                mtime = os.path.getmtime(run_path)
                 if most_recent_path is None or mtime > latest_mtime:
                     most_recent_path = dirpath
                     latest_mtime = mtime

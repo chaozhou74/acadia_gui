@@ -7,6 +7,7 @@ from collections import defaultdict
 import subprocess
 import logging
 import gc
+from pathlib import Path
 
 import numpy as np
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg, NavigationToolbar2QT
@@ -33,6 +34,7 @@ from acadia_gui.icons import get_icon
 # files used for rough estimate of progress rate, ETA, etc
 UPDATE_INDICATOR_FILE = "metadata.txt" # file whose last modified time indicates the last data update
 CREATE_INDICATOR_FILE = "run.py" # file whose creation time indicates the experiment time
+STOP_INDICATOR_FILE = ".stop"
 
 TOTAL_ITER_ATTRIBUTE = "iterations" # runtime class attribute that defines the total number of iterations
 
@@ -271,10 +273,21 @@ class LivePlotWidget(QWidget):
         kwargs_row.addWidget(self.plot_kwargs_box)
         kwargs_row.addWidget(self.update_buttons_box)
 
-        # --- Progress bar ---
+        # --- Progress bar ------------
         self.progress_bar = QProgressBar()
         self.progress_bar.setMinimum(0)
         self.progress_bar.setFormat("0/0")
+        # ---- stop button ------------
+        self.stop_button = QToolButton()
+        self.stop_button.setText("STOP")
+        self.stop_button.setObjectName("stop_button")
+        self.stop_button.setFixedWidth(80)
+        self.stop_button.clicked.connect(self.drop_stop_flag)
+
+
+        progress_row = QHBoxLayout()
+        progress_row.addWidget(self.progress_bar)
+        progress_row.addWidget(self.stop_button)
 
         # --- Layout setup ---
         layout = QVBoxLayout(self)
@@ -283,7 +296,7 @@ class LivePlotWidget(QWidget):
         layout.addWidget(self.canvas, stretch=1)
         layout.addLayout(interval_row)
         layout.addLayout(kwargs_row)
-        layout.addWidget(self.progress_bar)
+        layout.addLayout(progress_row)
         self.setLayout(layout)
 
         # --- Timer for update ---
@@ -328,6 +341,8 @@ class LivePlotWidget(QWidget):
                                                                     self.process_kwargs_box)
             self.update_buttons = self.create_update_buttons()
 
+        # Disable STOP button if .stop file already exists
+        self.update_stop_button_state()
 
         # Set default plot
         self.current_plot_name = self.plot_selector.currentText()
@@ -396,6 +411,9 @@ class LivePlotWidget(QWidget):
     def update_plot(self, force=False):
         if not self.ready:
             return
+
+        # Disable STOP button if .stop file is present (e.g., created externally)
+        self.update_stop_button_state()
 
         if self.is_paused or not self.data_path or not self.current_plot_name:
             return
@@ -887,6 +905,30 @@ class LivePlotWidget(QWidget):
         # --- Show the menu just below the snapshot button ---
         menu.exec_(self.snapshot_button.mapToGlobal(QtCore.QPoint(0, self.snapshot_button.height())))
 
+    # ---------- stop button behaviour ---------------
+    def drop_stop_flag(self):
+        stop_path = Path(self.data_path) / STOP_INDICATOR_FILE
+        stop_path.touch(exist_ok=True)
+        logger.info(f"Dropped '{STOP_INDICATOR_FILE}' in {self.data_path}")
+        self.update_stop_button_state()
+
+    def update_stop_button_state(self):
+        """
+        Checks if the `.stop` file exists and updates the STOP button accordingly.
+        Disables the button and updates text if already stopped.
+        """
+        if not self.data_path:
+            return
+        stop_path = Path(self.data_path) / STOP_INDICATOR_FILE
+        if stop_path.exists():
+            if self.stop_button.isEnabled():
+                self.stop_button.setEnabled(False)
+                self.stop_button.setText("STOPPED")
+        else:
+            self.stop_button.setEnabled(True)
+            self.stop_button.setText("STOP")
+
+
     # --------- theme ------------
     def set_theme(self, theme_name):
         from matplotlib import style as mpl_style
@@ -924,6 +966,10 @@ class LivePlotWidget(QWidget):
         # Progress bar reset
         self.progress_bar.setValue(0)
         self.progress_bar.setFormat("0/0")
+
+        # STOP button reset
+        self.stop_button.setEnabled(True)
+        self.stop_button.setText("STOP")
 
         # Also clear these for sanity
         self.data_path = None
