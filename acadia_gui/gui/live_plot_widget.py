@@ -402,6 +402,18 @@ class LivePlotWidget(QWidget):
         method_name = self.plot_registry.get(self.current_plot_name)
         if method_name and hasattr(self.rt, method_name):
             plot_func = getattr(self.rt, method_name)
+            current_plot_signature = inspect.signature(plot_func)
+
+            if "axs" in current_plot_signature.parameters:
+                self.current_plot_uses_axs = True
+                self.current_plot_axs_shape = getattr(plot_func, AXS_SHAPE_TAG, (1, 1))
+            elif "fig" in current_plot_signature.parameters:
+                self.current_plot_uses_axs = False
+                self.current_plot_axs_shape = None
+            else:
+                self.current_plot_uses_axs = None  # Invalid, will raise in make_plot
+                self.current_plot_axs_shape = None
+
             self.plot_inputs = self.create_inputs_from_signature(plot_func, self.plot_kwargs_layout,
                                                                  self.plot_kwargs_box)
         self.checked_right_click_flags.clear()
@@ -482,11 +494,16 @@ class LivePlotWidget(QWidget):
         plot_method = getattr(self.rt, plot_method_name)
         # get plot kwargs from gui input
         plot_kwargs = parse_inputs(self.plot_inputs)
-        # prepare plot axs
-        axs_shape = getattr(plot_method, AXS_SHAPE_TAG, (1, 1))
-        axs = figure.subplots(*axs_shape)
-        # make plot
-        plot_method(axs=axs, **plot_kwargs)
+
+        if self.current_plot_uses_axs is True:
+            axs = figure.subplots(*self.current_plot_axs_shape)
+            plot_method(axs=axs, **plot_kwargs)
+        elif self.current_plot_uses_axs is False:
+            plot_method(fig=figure, **plot_kwargs)
+            axs = figure.axes
+        else:
+            logger.error(f"Plot function '{plot_method.__name__}' must accept either `axs` or `fig`.")
+            return
 
         for idx, ax in enumerate(np.asarray(axs).flat):
             # add z display for pcm plots
@@ -500,6 +517,7 @@ class LivePlotWidget(QWidget):
             for label, _, handler in self.right_click_actions:
                 if label in self.checked_right_click_flags[key]:
                     handler(ax)
+        figure.tight_layout()
         return axs
 
 
@@ -592,7 +610,7 @@ class LivePlotWidget(QWidget):
         max_items_per_row = 4
 
         for name, param in sig.parameters.items():
-            if name in {"self", "axs"}:
+            if name in {"self", "axs", "fig"}:
                 continue
 
             default = param.default if param.default is not inspect.Parameter.empty else ""
@@ -976,6 +994,8 @@ class LivePlotWidget(QWidget):
         self.rt = None
         self.runtime_class = None
         self.data_processor_name = None
+        self.current_plot_uses_axs = None
+        self.current_plot_axs_shape = None
 
         self.ready = False
         self.is_paused = False

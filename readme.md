@@ -36,12 +36,43 @@ To generate live plotting, the Runtime class must define:
   
 
 - **One or more plot methods**  
-  - Tag each with `@annotate_method(plot_name=..., axs_shape:Optional[Tuple]=(1,1))`.
-  - Each plot method must accept an `axs` keyword argument, which will be passed a prepared Matplotlib axes array in the gui.
-  - For multi-axs plots, the axs_shape must be provided correctly in the annotation, so the GUI can prepare the correct plot axs layout for it.
-  - No explicit data inputs are needed; plot methods should read from the class attributes populated by the process method.
-  - Like the processing method, can also take keyword arguments.
-   
+  - Tag each with `@annotate_method(plot_name=..., axs_shape:Optional[Tuple]=(1,1))`
+  - A plot method must accept either:
+    - `axs`: an (array of) pre-allocated Matplotlib axes (via `plt.subplots`) based on `axs_shape`, **or**
+    - `fig`: a Matplotlib `Figure` object, giving the plot method full control over layout using `fig.add_subplot()` or `fig.add_gridspec()`.
+  - If `axs` is used, the GUI prepares axes using the specified `axs_shape`. For multi-axes layouts, this must be set accurately.
+  - If `fig` is used, `axs_shape` is ignored and the method is responsible for creating its own layout.
+  - Plot methods should not take explicit data inputs; they should access class attributes populated by the processing method.
+  - Like the processing method, they may accept keyword arguments (via GUI-configurable input fields).
+
+    **Examples**:
+  
+    - `axs`-based layout (for simple grids):
+  
+      ```python
+      @annotate_method(plot_name="summary", axs_shape=(1, 2))
+      def plot_summary(self, axs=None):
+          from acadia_qmsmt.plotting import prepare_plot_axes
+          fig, axs = prepare_plot_axes(axs, axs_shape=(1, 2))
+          axs[0].plot(self.iq_trace_amp)
+          axs[1].plot(self.iq_trace_phase)
+      ```
+  
+    - `fig`-based layout (preferred for custom or asymmetric layouts):
+  
+      ```python
+      @annotate_method(plot_name="asymmetric_layout")
+      def plot_asymmetric(self, fig=None):
+          fig = fig or plt.figure()
+          gs = fig.add_gridspec(3, 3, height_ratios=[1, 2, 1], width_ratios=[1, 1.3, 1])
+          ax_left = fig.add_subplot(gs[:, 0])
+          ax_middle = fig.add_subplot(gs[1, 1])
+          ax_right = fig.add_subplot(gs[:, 2])
+          ax_left.plot(self.raw)
+          ax_middle.plot(self.kernel)
+          ax_right.plot(self.output)
+      ```
+
 ---
 ## Getting started
 
