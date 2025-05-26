@@ -133,7 +133,7 @@ class KwargsJsonViewer(QWidget):
             try:
                 self._plot_array(selected.text(0), obj)
             except Exception as e:
-                logger.error(f"Failed to plot ndarray: {e}")
+                logger.error(f"Failed to plot ndarray: {e}", exc_info=True)
 
 
     def _flash_item(self, item):

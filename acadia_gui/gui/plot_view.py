@@ -104,7 +104,7 @@ class FigureDisplayWidget(QWidget):
             except Exception as e:
                 self.stack.setCurrentIndex(0)
                 self.image_label.setText(f"Failed to load live plot: {e}")
-                logger.error(e)
+                logger.error(e, exc_info=True)
 
 
     def show_selected_image(self, index):
@@ -145,7 +145,7 @@ class FigureDisplayWidget(QWidget):
             else:
                 logger.error("Pickled object is not a matplotlib figure.")
         except Exception as e:
-            logger.error(f"Failed to load or show .pkl: {e}")
+            logger.error(f"Failed to load or show .pkl: {e}", exc_info=True)
 
     def set_theme(self, theme_name):
         self.live_plot.set_theme(theme_name)

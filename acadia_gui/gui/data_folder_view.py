@@ -235,7 +235,7 @@ class FolderTreeWidget(QWidget):
                 win_path = to_windows_path(path)
                 subprocess.Popen(["explorer.exe", win_path])
             except Exception as e:
-                logger.error(f"Failed to open path in Explorer: {e}")
+                logger.error(f"Failed to open path in Explorer: {e}", exc_info=True)
         else:
             QDesktopServices.openUrl(QUrl.fromLocalFile(path))
 
@@ -248,7 +248,7 @@ class FolderTreeWidget(QWidget):
             shutil.move(path, trash_dir)
             logger.info(f"Moved {path} to {trash_dir}")
         except Exception as e:
-            logger.error(f"Failed to move {path} to trash: {e}")
+            logger.error(f"Failed to move {path} to trash: {e}", exc_info=True)
 
     @update_explorer
     def handle_restore(self, path):
@@ -266,7 +266,7 @@ class FolderTreeWidget(QWidget):
             shutil.move(path, restore_path)
             logger.info(f"Restored {path} to {restore_path}")
         except Exception as e:
-            logger.error(f"Failed to restore {path}: {e}")
+            logger.error(f"Failed to restore {path}: {e}", exc_info=True)
 
     @update_explorer
     def handle_empty_trash(self, path):
@@ -291,7 +291,7 @@ class FolderTreeWidget(QWidget):
                 shutil.rmtree(path)
                 logger.info(f"Deleted trash folder {path}")
             except Exception as e:
-                logger.error(f"Failed to delete trash folder {path}: {e}")
+                logger.error(f"Failed to delete trash folder {path}: {e}", exc_info=True)
 
     def select_most_recent_folder(self):
         # todo: the sorting can be optimized, kind of slow currently

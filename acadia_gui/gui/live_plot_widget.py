@@ -1,6 +1,7 @@
 import os
 import time
 import inspect
+import warnings
 from functools import partial
 from typing import get_type_hints, Literal, get_args
 from collections import defaultdict
@@ -37,6 +38,7 @@ CREATE_INDICATOR_FILE = "run.py" # file whose creation time indicates the experi
 STOP_INDICATOR_FILE = ".stop"
 
 TOTAL_ITER_ATTRIBUTE = "iterations" # runtime class attribute that defines the total number of iterations
+DATAMANAGER_ATTRIBUTE = "data" # runtime class attribute for data manager
 
 logger = logging.getLogger(__name__)
 
@@ -184,6 +186,8 @@ class LivePlotWidget(QWidget):
         self.folder_label = QLabel(" ")
         self.folder_label.setAlignment(Qt.AlignCenter)
         self.folder_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.plot_axes = None
+        self.last_axs_shape = None
 
         # -- default snapshot settings
         self.snapshot_original_dpi = 800 # high dpi
@@ -224,7 +228,7 @@ class LivePlotWidget(QWidget):
 
         # --- Polling interval input ---
         self.interval_input = QLineEdit(str(poll_interval_sec))
-        self.interval_input.setFixedWidth(35)
+        self.interval_input.setFixedWidth(40)
         self.interval_input.setToolTip("Polling interval (in seconds)")
         self.interval_input.editingFinished.connect(self.update_poll_interval)
 
@@ -332,7 +336,7 @@ class LivePlotWidget(QWidget):
         try:
             self.data_processor_name = get_data_process_method(self.rt)
         except AttributeError as e:
-            logger.error(e)
+            logger.error(e, exc_info=True)
             self.data_processor_name = None
 
         if hasattr(self.rt, self.data_processor_name):
@@ -349,7 +353,6 @@ class LivePlotWidget(QWidget):
         self.ready = True  # safe to allow plotting now
         self.select_plot(self.plot_selector.currentIndex())
         self.timer.start(self.poll_interval_ms)
-
 
     def stop(self):
         self.timer.stop()
@@ -371,12 +374,16 @@ class LivePlotWidget(QWidget):
     def update_poll_interval(self):
         try:
             seconds = float(self.interval_input.text())
-            if seconds < 0.1:
-                seconds = 0.1
+            if seconds < 0.015:
+                seconds = 0.015 # 60Hz maximum...
+                logger.warning(f"polling interval clipped to minimum of 0.015s")
             self.poll_interval_ms = int(seconds * 1000)
             self.timer.setInterval(self.poll_interval_ms)
         except ValueError:
+            logger.error(f"error interval input: {self.interval_input.text()}")
+        finally:
             self.interval_input.setText(str(self.poll_interval_ms / 1000))
+            self.interval_input.clearFocus()
 
 
     def get_latest_update_time(self):
@@ -414,6 +421,15 @@ class LivePlotWidget(QWidget):
                 self.current_plot_uses_axs = None  # Invalid, will raise in make_plot
                 self.current_plot_axs_shape = None
 
+            # Create and cache axes only if changed
+            if self.current_plot_uses_axs and self.current_plot_axs_shape != self.last_axs_shape:
+                self.canvas.figure.clf()
+                self.plot_axes = self.canvas.figure.subplots(*self.current_plot_axs_shape)
+                self.last_axs_shape = self.current_plot_axs_shape
+            elif not self.current_plot_uses_axs:
+                self.plot_axes = None
+                self.last_axs_shape = None
+
             self.plot_inputs = self.create_inputs_from_signature(plot_func, self.plot_kwargs_layout,
                                                                  self.plot_kwargs_box)
         self.checked_right_click_flags.clear()
@@ -436,13 +452,18 @@ class LivePlotWidget(QWidget):
                 return
             self.last_mtime = current_mtime
 
-            # Clear and load runtime and process current data
-            # need to reload runtime because that's how rt.data got updated
-            # todo: can probably update rt.data without having to reload the rt object. But then we have to
-            #  manually give that to rt.data, which requires rt to always store the datamanager object in rt.data
-            self.canvas.figure.clf()
-            gc.collect()
-            self.rt = self.runtime_class.load(self.data_path)
+            # reload runtime data
+            try:
+                getattr(self.rt, DATAMANAGER_ATTRIBUTE).load(self.data_path)
+            except Exception as e:
+                logger.warning(f"Failed to load data from existing runtime: {e}. Attempting full reload...",
+                               exc_info=True)
+                try:
+                    self.rt = self.runtime_class.load(self.data_path)
+                    logger.info(f"Reloaded runtime from {self.data_path}")
+                except Exception as e2:
+                    logger.error(f"Failed to reload runtime: {e2}", exc_info=True)
+                    return
 
             completed_iter = None
             if hasattr(self.rt, self.data_processor_name):
@@ -452,7 +473,7 @@ class LivePlotWidget(QWidget):
                     completed_iter = processor_func(**proc_kwargs)
                 except Exception as e:
                     logger.error(f"Error in data processing funciton "
-                                 f"`{self.runtime_class.__name__}.{self.data_processor_name}`: {e}")
+                                 f"`{self.runtime_class.__name__}.{self.data_processor_name}`: {e}", exc_info=True)
                 self.refresh_update_button_methods()
 
             else:
@@ -483,7 +504,7 @@ class LivePlotWidget(QWidget):
         except Exception as e:
             self.progress_bar.setValue(0)
             self.progress_bar.setFormat(f"Error: {str(e)}")
-            logger.error(e)
+            logger.error(e, exc_info=True)
 
 
     def make_plot(self, figure: Figure, plot_method_name: str, prepare_pcm=False):
@@ -495,13 +516,24 @@ class LivePlotWidget(QWidget):
         # get plot kwargs from gui input
         plot_kwargs = parse_inputs(self.plot_inputs)
 
+        # --- Defensive check for missing axes ---
+        if self.current_plot_uses_axs and self.plot_axes is None:
+            logger.warning("Expected plot_axes to exist but found None. Rebuilding...")
+            figure.clf()
+            self.plot_axes = figure.subplots(*self.current_plot_axs_shape)
+            self.last_axs_shape = self.current_plot_axs_shape
+
         if self.current_plot_uses_axs is True:
-            axs = figure.subplots(*self.current_plot_axs_shape)
+            axs = self.plot_axes
+            for ax in np.asarray(axs).flat:
+                ax.cla()
             plot_method(axs=axs, **plot_kwargs)
         elif self.current_plot_uses_axs is False:
+            figure.clf()
             plot_method(fig=figure, **plot_kwargs)
             axs = figure.axes
         else:
+            figure.clf()
             logger.error(f"Plot function '{plot_method.__name__}' must accept either `axs` or `fig`.")
             return
 
@@ -554,7 +586,7 @@ class LivePlotWidget(QWidget):
 
         except Exception as e:
             self.progress_bar.setFormat(f"{completed_iter}/{self.total_iter} | ETA error: {e}")
-            logger.error(f"ETA error: {e}")
+            logger.error(f"ETA error: {e}", exc_info=True)
 
 
     # ----------- kwarg inputs ------------------------------------------
@@ -595,7 +627,6 @@ class LivePlotWidget(QWidget):
         row_layout.addWidget(label_widget)
         row_layout.addWidget(widget)
         return widget
-
 
     def create_inputs_from_signature(self, func, layout: QVBoxLayout, group_box: QGroupBox):
         clear_layout(layout)
@@ -654,16 +685,47 @@ class LivePlotWidget(QWidget):
         max_items_per_row = 6
 
         for button_name, method_name in self.update_button_registary.items():
-            widget = QToolButton()
-            widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-            widget.setText(button_name)
-            row_layout.addWidget(widget)
-            widgets[button_name] = row_layout.itemAt(row_layout.count() - 1).widget()
-            items_in_row += 1
-            if items_in_row >= max_items_per_row:
-                self.update_buttons_layout.addLayout(row_layout)
-                row_layout = QHBoxLayout()
-                items_in_row = 0
+            method = getattr(self.rt, method_name)
+            sig = inspect.signature(method)
+
+            has_kwargs = any(
+                name not in {"self"}
+                for name in sig.parameters
+            )
+
+            # if update method has input:
+                # make a new row_layout with kwarg inputs and the button
+            if has_kwargs:
+                # flush current button row
+                if row_layout.count() > 0:
+                    self.update_buttons_layout.addLayout(row_layout)
+                    row_layout = QHBoxLayout()
+                    items_in_row = 0
+
+                full_row = QHBoxLayout()
+                input_widgets = self.create_inputs_from_signature(method, QVBoxLayout(), self.update_buttons_box)
+                for w in input_widgets.values():
+                    full_row.addWidget(w)
+
+                button = QToolButton()
+                button.setText(button_name)
+                button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+                full_row.addWidget(button)
+                self.update_buttons_layout.addLayout(full_row)
+
+                widgets[button_name] = (button, input_widgets)
+            else:
+                #make row layout with buttons
+                button = QToolButton()
+                button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+                button.setText(button_name)
+                row_layout.addWidget(button)
+                widgets[button_name] = (button, {})
+                items_in_row += 1
+                if items_in_row >= max_items_per_row:
+                    self.update_buttons_layout.addLayout(row_layout)
+                    row_layout = QHBoxLayout()
+                    items_in_row = 0
 
         if items_in_row > 0:
             self.update_buttons_layout.addLayout(row_layout)
@@ -673,25 +735,25 @@ class LivePlotWidget(QWidget):
 
     def refresh_update_button_methods(self):
         """
-        reconnect the buttons to the bound methods of the updated rt
+        Reconnect the buttons to the bound methods of the updated runtime instance.
         """
         for button_name, method_name in self.update_button_registary.items():
             update_method = getattr(self.rt, method_name)
+            button, input_widgets = self.update_buttons[button_name]
 
-            def _update_method_try():
+            def _update_method_try(checked=False, update_method=update_method, input_widgets=input_widgets):
                 try:
-                    update_method()
+                    kwargs = parse_inputs(input_widgets)
+                    update_method(**kwargs)
                 except Exception as e:
-                    logger.error(e)
+                    logger.error(e, exc_info=True)
 
-            button = self.update_buttons[button_name]
             try:
-                # Disconnect all old slots (safe even if none connected)
                 button.clicked.disconnect()
             except TypeError:
                 pass
-            button.clicked.connect(_update_method_try)
 
+            button.clicked.connect(_update_method_try)
 
     # ---------- right click options --------------------------
     def handle_right_click(self, event):
@@ -834,7 +896,7 @@ class LivePlotWidget(QWidget):
                 )
                 logger.info(f"Snapshot {self.data_path}/{self.current_plot_name} copied to clipboard!")
             except Exception as e:
-                logger.error(f"Failed to copy snapshot to clipboard: {e}")
+                logger.error(f"Failed to copy snapshot to clipboard: {e}", exc_info=True)
 
         # if on actual linux, we can just directly copy to clipboard.
         else:
@@ -844,7 +906,7 @@ class LivePlotWidget(QWidget):
                 clipboard.setImage(final_image)
                 logger.info(f"Snapshot {self.data_path}/{self.current_plot_name} copied to clipboard!")
             except Exception as e:
-                logger.error(f"Failed to copy snapshot to clipboard: {e}")
+                logger.error(f"Failed to copy snapshot to clipboard: {e}", exc_info=True)
 
         # clean up
         del canvas
@@ -996,6 +1058,8 @@ class LivePlotWidget(QWidget):
         self.data_processor_name = None
         self.current_plot_uses_axs = None
         self.current_plot_axs_shape = None
+        self.plot_axes = None
+        self.last_axs_shape = None
 
         self.ready = False
         self.is_paused = False

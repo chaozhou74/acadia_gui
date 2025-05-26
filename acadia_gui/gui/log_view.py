@@ -51,7 +51,7 @@ class LogViewer(QTabWidget):
             self._insert_with_formatting(browser, lines)
         except Exception as e:
             browser.setPlainText(f"Error reading {fname}:\n{e}")
-            logger.error(e)
+            logger.error(e, exc_info=True)
         self.file_mtimes[fname] = os.path.getmtime(full_path)
         self.addTab(browser, fname)
 
@@ -86,7 +86,7 @@ class LogViewer(QTabWidget):
             self._insert_with_formatting(browser, lines)
         except Exception as e:
             browser.setPlainText(f"Error reading {fname}:\n{e}")
-            logger.error(e)
+            logger.error(e, exc_info=True)
 
         self.file_mtimes[fname] = os.path.getmtime(full_path)
 
