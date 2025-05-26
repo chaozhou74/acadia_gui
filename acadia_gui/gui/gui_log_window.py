@@ -71,6 +71,7 @@ class GuiLogWindow(QWidget):
 
     def set_handler(self, handler: GuiLogHandler):
         self.handler = handler
+        self.update_filter()
 
 
     def update_filter(self):

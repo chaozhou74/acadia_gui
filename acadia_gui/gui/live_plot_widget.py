@@ -507,7 +507,7 @@ class LivePlotWidget(QWidget):
             logger.error(e, exc_info=True)
 
 
-    def make_plot(self, figure: Figure, plot_method_name: str, prepare_pcm=False):
+    def make_plot(self, figure: Figure, plot_method_name: str, prepare_pcm=False, force_remake_axes=False):
         """
         make the plot with plot_method_name in the given figure
         """
@@ -517,17 +517,26 @@ class LivePlotWidget(QWidget):
         plot_kwargs = parse_inputs(self.plot_inputs)
 
         # --- Defensive check for missing axes ---
-        if self.current_plot_uses_axs and self.plot_axes is None:
-            logger.warning("Expected plot_axes to exist but found None. Rebuilding...")
+        if self.current_plot_uses_axs and (self.plot_axes is None or force_remake_axes):
+            if not force_remake_axes:
+                logger.warning("Expected plot_axes to exist but found None. Rebuilding...")
             figure.clf()
             self.plot_axes = figure.subplots(*self.current_plot_axs_shape)
             self.last_axs_shape = self.current_plot_axs_shape
 
         if self.current_plot_uses_axs is True:
             axs = self.plot_axes
-            for ax in np.asarray(axs).flat:
-                ax.cla()
+            flat_axes = list(np.asarray(axs).flat)
+            if len(figure.axes) > len(flat_axes):# if plotter is making new axes somehow (colorbar)
+                figure.clf()
+                self.plot_axes = figure.subplots(*self.current_plot_axs_shape)
+                self.last_axs_shape = self.current_plot_axs_shape
+                axs = self.plot_axes  # update `axs` too
+            else:
+                for ax in flat_axes:
+                    ax.cla()
             plot_method(axs=axs, **plot_kwargs)
+
         elif self.current_plot_uses_axs is False:
             figure.clf()
             plot_method(fig=figure, **plot_kwargs)
@@ -828,8 +837,7 @@ class LivePlotWidget(QWidget):
         # --- Call the registered plot method to make a new plot ---
         method_name = self.plot_registry.get(self.current_plot_name)
         if method_name and hasattr(self.rt, method_name):
-            axs = self.make_plot(fig, method_name)
-            fig.tight_layout()
+            axs = self.make_plot(fig, method_name, force_remake_axes=True)
         else:
             logger.error("Plot method not found.")
             return

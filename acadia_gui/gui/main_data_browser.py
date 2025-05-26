@@ -90,7 +90,7 @@ class DataBrowser(QMainWindow):
         self.log_window.setVisible(False)
         handler = GuiLogHandler(self.log_window)
         self.log_window.set_handler(handler)  # Link back to allow filter updates
-        handler.setLevel(logging.INFO)
+        handler.setLevel(logging.DEBUG)
         logging.getLogger().addHandler(handler)
         logging.getLogger().setLevel(logging_level)
 
