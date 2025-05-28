@@ -11,6 +11,7 @@ setup(
       },
       install_requires=[
         'pyqt5',
-        'psutil', # for memory usage monitoring
+        'psutil', # for overall memory usage monitoring
+        'pympler' # python object memory usage tracking
     ]
 )

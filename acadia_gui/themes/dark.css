@@ -60,26 +60,48 @@ QToolButton[class="hoverFlat"]:hover {
     border-radius: 4px;
 }
 
+/*!* ------ stop button ---------- *!*/
+/*QToolButton#stop_button {*/
+/*    background-color: #d65c5c;*/
+/*    color: white;*/
+/*    border: 1px solid #888;*/
+/*    padding: 1px;*/
+/*    border-radius: 6px;*/
+/*    font-weight: bold;*/
+/*}*/
+
+/*QToolButton#stop_button:hover {*/
+/*    background-color: #fb4710;*/
+/*}*/
+
+/*!* Disabled STOP button *!*/
+/*QToolButton#stop_button:disabled {*/
+/*    background-color: #8e5e5e;*/
+/*    color: #cccccc;*/
+/*    border: 1px solid #666666;*/
+/*}*/
+
+
+/* ========== PUSH BUTTONS ========== */
 /* ------ stop button ---------- */
-QToolButton#stop_button {
-    background-color: #d65c5c;
-    color: white;
-    border: 1px solid #888;
-    padding: 1px;
-    border-radius: 6px;
+QPushButton#stop_button {
+    background-color: #fb2b2b;
+    color: #faf7f7;
     font-weight: bold;
 }
 
-QToolButton#stop_button:hover {
-    background-color: #fb4710;
+QPushButton#stop_button:hover {
+    background-color: #bf0505;
 }
 
 /* Disabled STOP button */
-QToolButton#stop_button:disabled {
-    background-color: #8e5e5e;
-    color: #cccccc;
-    border: 1px solid #666666;
+QPushButton#stop_button:disabled {
+    background-color: #fddfdf;
+    color: #666;
+    border: 1px solid #999;
+    border-radius: 2px;
 }
+
 
 /* ========== TOOL BUTTONS & TOOLBAR ========== */
 QToolButton {

@@ -6,7 +6,7 @@ current_path = str(pathlib.Path(__file__).parent)
 # for neo 1, the Windows computer
 config_path = current_path + "/instruments.yaml"  # path to the initial instrument configuration file
 param_path = current_path + "/ins_params.json"  # path to the instrument parameter saving file
-host = "10.66.54.161" # ip or hostname of the instrument server
+host = "10.66.xxx.xxx" # ip or hostname of the instrument server
 host_port = 5560
 timeout = 600
 

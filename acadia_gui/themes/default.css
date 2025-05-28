@@ -74,27 +74,81 @@ QToolButton:checked {
 }
 
 /* ------ stop button ---------- */
-QToolButton#stop_button {
-    /*background-color: #f14f4f;*/
-    background-color: #f05555;
-    color: white;
-    border: 1px solid #999;
-    padding: 1px;
-    border-radius: 6px;
+/*QToolButton#stop_button {*/
+/*    !*background-color: #f14f4f;*!*/
+/*    background-color: #f05555;*/
+/*    color: white;*/
+/*    border: 1px solid #999;*/
+/*    padding: 1px;*/
+/*    border-radius: 6px;*/
+/*    font-weight: bold;*/
+/*}*/
+
+/*QToolButton#stop_button:hover {*/
+/*    background-color: #ff0000;*/
+/*}*/
+
+/*!* Disabled STOP button *!*/
+/*QToolButton#stop_button:disabled {*/
+/*    background-color: #efb9b9;*/
+/*    color: #666;*/
+/*    border: 1px solid #aaa;*/
+/*}*/
+
+
+
+/* ========== PUSH BUTTONS ========== */
+/* ------ update buttons ---------- */
+QPushButton#update_button {
+    /*background-color: #e0ebf8;*/
+    /*border: 2px solid #8fbcd4;*/
+    /*border-radius: 4px;*/
+    /*padding: 1px;*/
+    /*color: black;*/
+}
+QPushButton#update_button:hover {
+    background-color: #e0ebf8;
+}
+QPushButton#update_button:pressed {
+    background-color: #87bdf4;
+}
+
+/* ------ stop button ---------- */
+QPushButton#stop_button {
+    background-color: #fb2b2b;
+    color: #faf7f7;
     font-weight: bold;
 }
 
-QToolButton#stop_button:hover {
-    background-color: #ff0000;
+QPushButton#stop_button:hover {
+    background-color: #bf0505;
 }
 
 /* Disabled STOP button */
-QToolButton#stop_button:disabled {
-    background-color: #efb9b9;
+QPushButton#stop_button:disabled {
+    background-color: #fddfdf;
     color: #666;
-    border: 1px solid #aaa;
+    border: 1px solid #999;
+    border-radius: 2px;
 }
 
+/* ============ ComboBox ============ */
+QComboBox#kwarg_combo_box {
+    border: 1px solid #aaaaaa;
+    border-radius: 2px;
+    padding: 2px;
+}
+
+QComboBox#kwarg_combo_box:drop-down {
+    border: none;
+    background: transparent;
+}
+
+QComboBox#kwarg_combo_box:down-arrow {
+    image: none;
+    width: 0;
+    height: 0;
+}
 
 /* ========== HOVER-ONLY TOOL BUTTONS ========== */
 QToolButton[class="hoverFlat"] {

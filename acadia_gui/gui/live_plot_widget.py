@@ -17,7 +17,7 @@ from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.ticker import ScalarFormatter
 
 from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QWidgetAction, QMenu, QAction, QApplication, QToolButton,
+    QWidget, QVBoxLayout, QHBoxLayout, QWidgetAction, QMenu, QAction, QApplication, QToolButton, QPushButton,
     QProgressBar, QLineEdit, QLabel, QComboBox, QGroupBox, QGridLayout, QCheckBox, QSizePolicy, QFrame
 )
 from PyQt5.QtCore import QTimer, Qt, QSize
@@ -26,7 +26,7 @@ from PyQt5.QtGui import QImage, QPainter, QFont, QIcon
 
 from acadia_qmsmt.helpers.saved_runtime_loader import insert_saved_qmsmt_module, get_saved_runtime_class
 from acadia_qmsmt.helpers import get_registered_plot_methods, get_data_process_method, get_registered_button_methods
-from acadia_qmsmt.helpers.annotation import AXS_SHAPE_TAG
+from acadia_qmsmt.helpers.annotation import AXS_SHAPE_TAG, get_registered_methods, get_registered_customizer
 
 from acadia_gui.helpers.path_adapter import to_windows_path, detect_platform
 from acadia_gui.icons import get_icon
@@ -161,6 +161,7 @@ def make_kwarg_box(title):
     box.setLayout(layout)
     return box, layout
 
+
 class LivePlotWidget(QWidget):
     def __init__(self, poll_interval_sec=2, update_indicator_file=UPDATE_INDICATOR_FILE,
                  create_indicator_file=CREATE_INDICATOR_FILE):
@@ -282,7 +283,7 @@ class LivePlotWidget(QWidget):
         self.progress_bar.setMinimum(0)
         self.progress_bar.setFormat("0/0")
         # ---- stop button ------------
-        self.stop_button = QToolButton()
+        self.stop_button = QPushButton()
         self.stop_button.setText("STOP")
         self.stop_button.setObjectName("stop_button")
         self.stop_button.setFixedWidth(80)
@@ -292,6 +293,7 @@ class LivePlotWidget(QWidget):
         progress_row = QHBoxLayout()
         progress_row.addWidget(self.progress_bar)
         progress_row.addWidget(self.stop_button)
+        self.stop_button.setFixedHeight(self.progress_bar.sizeHint().height())
 
         # --- Layout setup ---
         layout = QVBoxLayout(self)
@@ -320,6 +322,19 @@ class LivePlotWidget(QWidget):
         # Get the saved runtime class and load runtime
         self.runtime_class = get_saved_runtime_class(data_path)
         self.rt = self.runtime_class.load(self.data_path)
+
+        # run the customizer for programmatic plot/button modification if it exists
+        customizer_name = get_registered_customizer(self.rt)
+        if customizer_name is not None:
+            try:# call the customizer method for preparing programmatically generated plots/buttons
+                getattr(self.rt, customizer_name)()
+                logger.debug(f"Using customizer method {self.runtime_class.__name__}.{customizer_name}")
+            except Exception as e:
+                logger.error(f"Error in customizer method "
+                             f"{self.runtime_class.__name__}.{customizer_name} : {e}", exc_info=True)
+        else:
+            logger.debug(f"No customizer method found in {self.runtime_class.__name__}, skipped.")
+
 
         self.total_iter =  getattr(self.rt, TOTAL_ITER_ATTRIBUTE, None)
         if self.total_iter is None:
@@ -612,6 +627,7 @@ class LivePlotWidget(QWidget):
         # input fields with type hint Literal will show as combobox (drop down menu)
         elif hasattr(annotation, '__origin__') and annotation.__origin__ is Literal:
             widget = QComboBox()
+            widget.setObjectName("kwarg_combo_box")
             choices = get_args(annotation)
             widget.addItems([str(c) for c in choices])
             if default in choices:
@@ -716,8 +732,9 @@ class LivePlotWidget(QWidget):
                 for w in input_widgets.values():
                     full_row.addWidget(w)
 
-                button = QToolButton()
+                button = QPushButton()
                 button.setText(button_name)
+                button.setObjectName("update_button")
                 button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
                 full_row.addWidget(button)
                 self.update_buttons_layout.addLayout(full_row)
@@ -725,7 +742,8 @@ class LivePlotWidget(QWidget):
                 widgets[button_name] = (button, input_widgets)
             else:
                 #make row layout with buttons
-                button = QToolButton()
+                button = QPushButton()
+                button.setObjectName("update_button")
                 button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
                 button.setText(button_name)
                 row_layout.addWidget(button)
