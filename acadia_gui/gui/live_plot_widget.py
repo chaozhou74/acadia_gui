@@ -503,12 +503,10 @@ class LivePlotWidget(QWidget):
             if not method_name:
                 return
 
-            # Call plot into ax
-            axs = self.make_plot(self.canvas.figure, method_name, prepare_pcm=True)
-
-            self.canvas.draw()
-
             if completed_iter is not None:
+                # Call plot into ax
+                axs = self.make_plot(self.canvas.figure, method_name, prepare_pcm=True)
+                self.canvas.draw()
                 self._update_progress_bar(completed_iter)
             else:
                 self.progress_bar.setValue(0)
