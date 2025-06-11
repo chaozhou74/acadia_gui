@@ -63,6 +63,7 @@ class DataFolderProxyModel(QSortFilterProxyModel):
     For keeping the Trash folder always on top **within each directory**.
     Also fallback to mtime sort for others.
     """
+
     def lessThan(self, left: QModelIndex, right: QModelIndex) -> bool:
         # Only customize if they have the same parent
         if left.parent() != right.parent():
@@ -77,14 +78,23 @@ class DataFolderProxyModel(QSortFilterProxyModel):
         if right_name == TRASH_FOLDER_NAME and left_name != TRASH_FOLDER_NAME:
             return False
 
-        # Otherwise: sort by Date Modified (column 3)
-        left_mtime = left.sibling(left.row(), 3).data()
-        right_mtime = right.sibling(right.row(), 3).data()
+        # Check which column is being sorted
+        sort_column = self.sortColumn()
+        if sort_column == 0:
+            return left_name.lower() < right_name.lower()  # Case-insensitive sort
 
-        if left_mtime is None or right_mtime is None:
-            return super().lessThan(left, right)
+        elif sort_column == 3:
+            # Sort by Date Modified (column 3)
+            left_mtime = left.sibling(left.row(), 3).data()
+            right_mtime = right.sibling(right.row(), 3).data()
 
-        return left_mtime < right_mtime
+            if left_mtime is None or right_mtime is None:
+                return super().lessThan(left, right)
+
+            return left_mtime < right_mtime
+
+        return super().lessThan(left, right)
+
 
 def update_explorer(func):
     @wraps(func)

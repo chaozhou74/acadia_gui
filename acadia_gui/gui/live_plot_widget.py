@@ -184,6 +184,7 @@ class LivePlotWidget(QWidget):
         self.plot_registry = {}
         self.current_plot_name = None
         self.ready = False
+        self.completed_iter = None
         self.folder_label = QLabel(" ")
         self.folder_label.setAlignment(Qt.AlignCenter)
         self.folder_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
@@ -316,9 +317,14 @@ class LivePlotWidget(QWidget):
         self.folder_label.setText(data_path)
         self.is_paused = False
         self.last_mtime = 0
+        self.completed_iter = None
 
         # Load the saved acadia_qmsmt.py as the acadia_qmsmt.qmsmt submodule
-        insert_saved_qmsmt_module(data_path)
+        try:
+            insert_saved_qmsmt_module(data_path)
+        except Exception as e:
+            logger.warning(f"Failed to load the saved acadia_qmsmt.qmsmt submodule : {e}. "
+                           f"Using the global version", exc_info=True)
         # Get the saved runtime class and load runtime
         self.runtime_class = get_saved_runtime_class(data_path)
         self.rt = self.runtime_class.load(self.data_path)
@@ -374,6 +380,7 @@ class LivePlotWidget(QWidget):
         self.canvas.figure.clf()
         self.canvas.draw()
         self.ready = False
+        self.completed_iter = None
 
 
     def toggle_pause(self):
@@ -448,7 +455,13 @@ class LivePlotWidget(QWidget):
             self.plot_inputs = self.create_inputs_from_signature(plot_func, self.plot_kwargs_layout,
                                                                  self.plot_kwargs_box)
         self.checked_right_click_flags.clear()
-        self.update_plot(force=True)
+
+        # if we already have data, just redo plot
+        if self.completed_iter is not None:
+            self.make_plot(self.canvas.figure, method_name, prepare_pcm=True)
+            self.canvas.draw()
+        else: # if we don't have data yet, redo data processing, then plot
+            self.update_plot(force=True)
 
 
     def update_plot(self, force=False):
@@ -505,7 +518,7 @@ class LivePlotWidget(QWidget):
 
             if completed_iter is not None:
                 # Call plot into ax
-                axs = self.make_plot(self.canvas.figure, method_name, prepare_pcm=True)
+                axs = self.make_plot(self.canvas.figure, method_name, prepare_pcm=True, force_remake_axes=force)
                 self.canvas.draw()
                 self._update_progress_bar(completed_iter)
             else:
@@ -513,6 +526,8 @@ class LivePlotWidget(QWidget):
                 self.progress_bar.setFormat(
                     f"'{self.rt.__class__.__name__}.{self.data_processor_name}' did not return a valid iteration count"
                 )
+
+            self.completed_iter = completed_iter
 
         except Exception as e:
             self.progress_bar.setValue(0)
@@ -1086,6 +1101,7 @@ class LivePlotWidget(QWidget):
         self.last_axs_shape = None
 
         self.ready = False
+        self.completed_iter = None
         self.is_paused = False
         self.pause_button.setIcon(self._pause_icon)
         self.last_mtime = 0
