@@ -741,9 +741,24 @@ class LivePlotWidget(QWidget):
                     items_in_row = 0
 
                 full_row = QHBoxLayout()
-                input_widgets = self.create_inputs_from_signature(method, QVBoxLayout(), self.update_buttons_box)
-                for w in input_widgets.values():
-                    full_row.addWidget(w)
+                # input_widgets = self.create_inputs_from_signature(method, QVBoxLayout(), self.update_buttons_box)
+                # for w in input_widgets.values():
+                #     full_row.addWidget(w)
+
+                input_widgets = {}
+                input_row = QHBoxLayout()
+                sig = inspect.signature(method)
+                type_hints = get_type_hints(method)
+
+                for name, param in sig.parameters.items():
+                    if name == "self":
+                        continue
+                    default = param.default if param.default is not inspect.Parameter.empty else ""
+                    annotation = type_hints.get(name, None)
+                    widget = self.add_kwarg_input(input_row, name, default, annotation)
+                    input_widgets[name] = widget
+
+                full_row.addLayout(input_row)
 
                 button = QPushButton()
                 button.setText(button_name)
