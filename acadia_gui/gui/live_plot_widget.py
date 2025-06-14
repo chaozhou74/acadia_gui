@@ -883,7 +883,10 @@ class LivePlotWidget(QWidget):
         # --- Call the registered plot method to make a new plot ---
         method_name = self.plot_registry.get(self.current_plot_name)
         if method_name and hasattr(self.rt, method_name):
-            axs = self.make_plot(fig, method_name, force_remake_axes=True)
+            plot_func = getattr(self.rt, method_name)
+            plot_kwargs = parse_inputs(self.plot_inputs)
+            axs = fig.subplots(*self.current_plot_axs_shape)
+            plot_func(axs=axs, **plot_kwargs)
         else:
             logger.error("Plot method not found.")
             return
