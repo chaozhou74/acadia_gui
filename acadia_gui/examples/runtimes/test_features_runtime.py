@@ -61,12 +61,10 @@ class ResonatorSpectroscopyTestGuiRuntime(QMsmtRuntime):
 
         # Create a sequence for the sequencer to generate the pulse and capture it
         def sequence(a: Acadia):
-            resonator.prepare_cmacc(self.capture_window_name)
-
             with a.channel_synchronizer():
                 # Measure the resonator by driving the "readout" waveform on the stimulus IO
                 # and capture into the "readout_accumulated" waveform on the capture IO
-                resonator.measure("readout", "readout_accumulated")
+                resonator.measure("readout", "readout_accumulated", self.capture_window_name)
 
         # misc hardware/software preparations
         self.acadia.compile(sequence)
@@ -204,7 +202,7 @@ class ResonatorSpectroscopyTestGuiRuntime(QMsmtRuntime):
 
     # --- Dummy example #1: axes‑based layout ----------------------------
     @annotate_method(plot_name="test_1_ax_based", axs_shape=(2, 1))
-    def plot_test1(self, *, axs=None, ax1_label=1, hide_ax2: bool = False,
+    def plot_test1(self, axs=None, ax1_label=1, hide_ax2: bool = False,
                    ax2_color: Literal["r", "g", "b"] = "g"):
         """
         Similar to the data processor method, the plotter method can also take kwargs, and GUI will display them, same
@@ -229,7 +227,7 @@ class ResonatorSpectroscopyTestGuiRuntime(QMsmtRuntime):
 
     # --- Dummy example #2: figure‑based layout --------------------------
     @annotate_method(plot_name="test_2_fig_based")
-    def plot_test2(self, *, fig=None, ax1_label=1, ax2_color: Literal["r", "g", "b"] = "g"):
+    def plot_test2(self, fig=None, ax1_label=1, ax2_color: Literal["r", "g", "b"] = "g"):
         """Now we own the `Figure` and we can lay it out however we like."""
         from matplotlib.pyplot import figure
         fig = figure() if fig is None else fig
@@ -251,7 +249,7 @@ class ResonatorSpectroscopyTestGuiRuntime(QMsmtRuntime):
 
     # --- Real plot 1: amplitude & phase vs. DAC --------------------------
     @annotate_method(plot_name="mag_phase_vs_dac", axs_shape=(2, 1))
-    def plot_data(self, *, axs=None, apply_e_delay: bool = True, unwrap_phase: bool = True):
+    def plot_data(self, axs=None, apply_e_delay: bool = True, unwrap_phase: bool = True):
 
         # ------------ use a helper function to prepare plot axes ------------------------
         # this is a very lightweight helper
@@ -292,7 +290,7 @@ class ResonatorSpectroscopyTestGuiRuntime(QMsmtRuntime):
 
     # --- Real plot 2: mix‑and‑match layout + pseudo Smith chart ----------
     @annotate_method(plot_name="test arbitrary laypout", axs_shape=(2, 1))
-    def plot_data_2(self, *, fig=None,
+    def plot_data_2(self, fig=None,
                     data_type: Literal["mag_phase", "re_im"] = "mag_phase",
                     apply_e_delay: bool = True):
         """Flexible playground plot to experiment with layouts."""

@@ -458,7 +458,11 @@ class LivePlotWidget(QWidget):
 
         # if we already have data, just redo plot
         if self.completed_iter is not None:
-            self.make_plot(self.canvas.figure, method_name, prepare_pcm=True)
+            try:
+                self.make_plot(self.canvas.figure, method_name, prepare_pcm=True)
+            except Exception as e:
+                self.canvas.figure.clf()
+                logger.error(f"Error in making plot '{method_name}', {e}", exc_info=True)
             self.canvas.draw()
         else: # if we don't have data yet, redo data processing, then plot
             self.update_plot(force=True)
@@ -563,6 +567,7 @@ class LivePlotWidget(QWidget):
             else:
                 for ax in flat_axes:
                     ax.cla()
+                    ax.set_aspect("auto")
             plot_method(axs=axs, **plot_kwargs)
 
         elif self.current_plot_uses_axs is False:
