@@ -85,8 +85,8 @@ class DataFolderProxyModel(QSortFilterProxyModel):
 
         elif sort_column == 3:
             # Sort by Date Modified (column 3)
-            left_mtime = left.sibling(left.row(), 3).data()
-            right_mtime = right.sibling(right.row(), 3).data()
+            left_mtime = self.sourceModel().fileInfo(left).lastModified()
+            right_mtime = self.sourceModel().fileInfo(right).lastModified()
 
             if left_mtime is None or right_mtime is None:
                 return super().lessThan(left, right)
@@ -104,7 +104,26 @@ def update_explorer(func):
         return ret
     return wrapper
 
-class FolderTreeWidget(QWidget):
+
+class CustomTreeView(QTreeView):
+    def __init__(self, parent_widget):
+        """
+        Allows navigating with back and forward keys on the mouse
+        """
+        super().__init__()
+        self.folder_widget = parent_widget
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.XButton1:  # Back
+            self.folder_widget.go_back()
+            return
+        elif event.button() == Qt.XButton2:  # Forward
+            self.folder_widget.go_forward()
+            return
+        super().mousePressEvent(event)
+
+
+class FolderTreeWidget(QTreeView):
     def __init__(self, root_path, on_select_callback):
         super().__init__()
         self.root_path = root_path
@@ -117,7 +136,7 @@ class FolderTreeWidget(QWidget):
         self.proxy_model = DataFolderProxyModel()
         self.proxy_model.setSourceModel(self.model)
 
-        self.tree = QTreeView()
+        self.tree = CustomTreeView(self)
         self.tree.setModel(self.proxy_model)
         self.tree.setRootIndex(self.proxy_model.mapFromSource(self.model.index(root_path)))
         self.tree.clicked.connect(self.folder_selected)
@@ -128,6 +147,7 @@ class FolderTreeWidget(QWidget):
         self.tree.hideColumn(2)  # Type
         self.tree.hideColumn(3)  # Time Modified
 
+        # ----- top buttons --------------
         self.select_button = QPushButton("Select Root Folder")
         self.select_button.clicked.connect(self.select_new_root)
 
@@ -144,21 +164,37 @@ class FolderTreeWidget(QWidget):
         self.refresh_button.setToolTip("Refresh folders")
         self.refresh_button.clicked.connect(self.refresh_model)
 
+        button_row_upper = QHBoxLayout()
+        button_row_upper.addWidget(self.select_button)
+        button_row_upper.addWidget(self.refresh_button)
+        button_row_upper.addWidget(self.recent_button)
+        button_row_upper.addWidget(self.sort_mtime_button)
 
-        button_row = QHBoxLayout()
-        button_row.addWidget(self.select_button)
-        button_row.addWidget(self.refresh_button)
-        button_row.addWidget(self.recent_button)
-        button_row.addWidget(self.sort_mtime_button)
+        # ----- bottom buttons --------------
+        self.back_button = QPushButton("←")
+        self.back_button.clicked.connect(self.go_back)
+        self.back_button.setToolTip("Go back to previously viewed folder")
+        self.forward_button = QPushButton("→")
+        self.forward_button.clicked.connect(self.go_forward)
+        self.forward_button.setToolTip("Go forward to next viewed folder")
+        button_row_lower = QHBoxLayout()
+        button_row_lower.addWidget(self.back_button)
+        button_row_lower.addWidget(self.forward_button)
 
 
         layout = QVBoxLayout(self)
-        layout.addLayout(button_row)
+        layout.addLayout(button_row_upper)
         layout.addWidget(self.tree)
+        layout.addLayout(button_row_lower)
         self.setLayout(layout)
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self.open_context_menu)
         # self.model.directoryLoaded.connect(lambda _: self.tree.sortByColumn(3, Qt.DescendingOrder))
+
+        # folder selection history
+        self.history = []
+        self.history_index = -1  # Points to current item in history
+        self.history_max = 10
 
     def refresh_model(self):
         # this effectively tells the model to "look again"
@@ -172,6 +208,8 @@ class FolderTreeWidget(QWidget):
 
     def folder_selected(self, index: QModelIndex):
         path = self.source_path_from_proxy_index(index)
+        if is_datafolder(path):
+            self._update_history(path)
         self.on_select_callback(path)
 
     def select_new_root(self):
@@ -185,6 +223,38 @@ class FolderTreeWidget(QWidget):
             self.model.setRootPath(root_path)
             self.tree.setRootIndex(self.proxy_model.mapFromSource(self.model.index(root_path)))
             self.root_path = root_path
+            # clear navigation history
+            self.history = []
+            self.history_index = -1  # Points to current item in history
+
+    def collapse_peer_folders(self, path):
+        """
+        Collapse all sibling folders of the selected top-level folder.
+        Keeps the clicked folder expanded and visible, but collapses everything else at the same level and below.
+        """
+        source_index = self.model.index(path)
+        proxy_index = self.proxy_model.mapFromSource(source_index)
+
+        if not proxy_index.isValid():
+            return
+
+        parent_proxy = proxy_index.parent()
+
+        for i in range(self.proxy_model.rowCount(parent_proxy)):
+            sibling_index = self.proxy_model.index(i, 0, parent_proxy)
+
+            if sibling_index == proxy_index:
+                continue  # Don't collapse the clicked folder
+
+            # Collapse sibling and all of its children
+            def recurse(index):
+                for j in range(self.proxy_model.rowCount(index)):
+                    child = self.proxy_model.index(j, 0, index)
+                    recurse(child)
+                self.tree.collapse(index)
+
+            recurse(sibling_index)
+
 
     def open_context_menu(self, position):
         index = self.tree.indexAt(position)
@@ -207,15 +277,16 @@ class FolderTreeWidget(QWidget):
         menu.addAction("Open in File Explorer")
         menu.addAction("Copy Path")
 
+        if not is_datafolder(path):
+            menu.addAction("Collapse Peers")
+            menu.addAction("Set as Root")
+
         if is_in_trash:
             menu.addAction("Restore")
         elif is_trash:
             menu.addAction("Empty")
         else:
             menu.addAction("Trash")
-
-        if not is_datafolder(path):
-            menu.addAction("Set as Root")
 
         return menu
 
@@ -237,6 +308,9 @@ class FolderTreeWidget(QWidget):
 
         elif action_text == "Set as Root":
             self.set_root_path(path)
+
+        elif action_text == "Collapse Peers":
+            self.collapse_peer_folders(path)
 
 
     def open_in_file_explorer(self, path):
@@ -323,6 +397,7 @@ class FolderTreeWidget(QWidget):
             if proxy_index.isValid():
                 self.tree.setCurrentIndex(proxy_index)
                 self.tree.scrollTo(proxy_index)
+                self._update_history(most_recent_path)
                 self.on_select_callback(most_recent_path)
 
     def sort_by_mtime(self):
@@ -331,3 +406,38 @@ class FolderTreeWidget(QWidget):
         self.current_sort_order = (
             Qt.AscendingOrder if self.current_sort_order == Qt.DescendingOrder else Qt.DescendingOrder
         )
+
+    # navigate with side buttons
+    def _update_history(self, path):
+        # Avoid duplicates when navigating
+        if self.history and self.history_index >= 0 and self.history[self.history_index] == path:
+            return
+
+        # Truncate forward history if we branched
+        self.history = self.history[:self.history_index + 1]
+        self.history.append(path)
+
+        # Limit history length
+        if len(self.history) > self.history_max:
+            self.history.pop(0)
+
+        self.history_index = len(self.history) - 1
+
+    def go_back(self):
+        if self.history_index > 0:
+            self.history_index -= 1
+            self._navigate_to_history_index()
+
+    def go_forward(self):
+        if self.history_index < len(self.history) - 1:
+            self.history_index += 1
+            self._navigate_to_history_index()
+
+    def _navigate_to_history_index(self):
+        path = self.history[self.history_index]
+        source_index = self.model.index(path)
+        proxy_index = self.proxy_model.mapFromSource(source_index)
+        if proxy_index.isValid():
+            self.tree.setCurrentIndex(proxy_index)
+            self.tree.scrollTo(proxy_index)
+            self.on_select_callback(path)

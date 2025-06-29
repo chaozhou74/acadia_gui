@@ -34,10 +34,10 @@ QMenu::item:selected {
 /* ========== BUTTONS ========== */
 QPushButton {
     background-color: #555555;
-    border: 1px solid #555;
-    padding: 6px 10px;
+    border: 1px solid #777;
+    padding: 2px;
     border-radius: 4px;
-    color: #dddddd;
+    /*color: #dddddd;*/
 }
 QPushButton:hover {
     background-color: #444;

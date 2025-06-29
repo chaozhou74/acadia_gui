@@ -154,12 +154,16 @@ class AppMenuBar(QMenuBar):
 
         result_lines = ["--- Python Object Mem Usage ---\n"]
         for name, obj in components.items():
-            if obj is not None:
+            if obj is None:
+                result_lines.append(f"{name}: (not found)")
+                continue
+
+            try:
                 size_bytes = asizeof.asizeof(obj)
                 size_mb = size_bytes / (1024 ** 2)
                 result_lines.append(f"{name}: {size_mb:.2f} MB")
-            else:
-                result_lines.append(f"{name}: (not found)")
+            except Exception as e:
+                result_lines.append(f"{name}: (Error: {e})")
 
         return "\n".join(result_lines)
 
