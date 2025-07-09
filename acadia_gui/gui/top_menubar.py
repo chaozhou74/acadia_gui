@@ -4,13 +4,14 @@ from pathlib import Path
 import logging
 
 
-from PyQt5.QtWidgets import QMenuBar, QAction, QLabel, QApplication, QTextEdit, QWidget, QVBoxLayout, QFrame, QToolButton, QHBoxLayout
+from PyQt5.QtWidgets import QMenuBar, QAction, QLabel, QApplication, QTextEdit, QWidget, QVBoxLayout, QFrame, QToolButton, QHBoxLayout, QInputDialog, QMessageBox
 from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtGui import QIcon
 
 
-from acadia_gui import THEME_PATH
+from acadia_gui import THEME_PATH, CONFIG_PATH
 from acadia_gui.icons import get_icon
+from acadia_gui.utils import load_user_config, save_user_config
 
 MEM_THRES_MEDIUM = 3 # threshold for medium memory usage, in GB
 MEM_THRES_HIGH = 10 # threshold for high memory usage, in GB
@@ -45,12 +46,14 @@ class AppMenuBar(QMenuBar):
         self.apply_theme_callback = apply_theme_callback
         self.parent_window = parent
 
+        self.config = load_user_config()
+
         # === Menus ===
         self.theme_menu = self.addMenu("Theme")
         self.view_menu = self.addMenu("View")
         self.help_menu = self.addMenu("Help")
 
-        self.load_themes()
+        self._load_themes()
         self.set_view_actions()
 
         # === Memory usage ===
@@ -105,15 +108,21 @@ class AppMenuBar(QMenuBar):
         self.setCornerWidget(corner_widget, Qt.TopRightCorner)
         corner_widget.adjustSize()
 
-    def load_themes(self):
+    def _load_themes(self):
         self.theme_menu.clear()
         theme_dir = Path(THEME_PATH)
         if theme_dir.exists():
             for file in theme_dir.glob("*.css"):
                 action = QAction(file.stem, self)
-                action.triggered.connect(lambda _, name=file.name: self.apply_theme_callback(name))
+                action.triggered.connect(lambda _, name=file.name: self.set_theme(name))
                 self.theme_menu.addAction(action)
 
+    def set_theme(self, theme_name: str, save=True):
+        if self.apply_theme_callback:
+            self.apply_theme_callback(theme_name)
+        if save:
+            self.config["theme"] = theme_name
+            save_user_config(self.config)
 
     def update_memory_label(self):
         mem_bytes = psutil.Process(os.getpid()).memory_info().rss
@@ -222,6 +231,21 @@ class AppMenuBar(QMenuBar):
     def set_view_actions(self):
         self.show_log_action = self._make_view_action("GUI Log", self.toggle_log_window, init_checked=False)
         self.rt_info_action = self._make_view_action("Runtime Info", self.toggle_right_panel)
+        self.set_scaling_action = QAction("Set GUI Scaling...", self)
+        self.set_scaling_action.triggered.connect(self.change_gui_scaling)
+        self.view_menu.addAction(self.set_scaling_action)
 
 
-
+    def change_gui_scaling(self):
+        current_scale = float(self.config.get("scale_factor", "1.0"))
+        new_scale, ok = QInputDialog.getDouble(
+            self, "Set GUI Scaling Factor",
+            "Recommended values:\n1.0 for 1080p\n1.5 for 2K\n2.0 for 4K",
+            value=current_scale, min=0.5, max=4.0, decimals=1
+        )
+        if ok:
+            self.config["scale_factor"] = str(new_scale)
+            save_user_config(self.config)
+            QMessageBox.information(self, "Restart Required", "Restart the application to apply new scaling.\n\n"
+                                    f"If the GUI becomes unusable, "
+                                    f"manually edit the value of `scale_factor` in `{CONFIG_PATH}`")

@@ -1,7 +1,7 @@
 import numpy as np
 from matplotlib import pyplot as plt
 
-from acadia_gui.helpers import to_local_path
+from acadia_qmsmt.helpers.path_adapter import to_local_path
 from acadia_qmsmt.helpers import load_runtime_from_data_dir
 
 data_path = r"/home/chao/Data/test/ReadoutSpec2/250524_015352"

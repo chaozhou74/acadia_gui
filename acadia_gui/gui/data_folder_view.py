@@ -9,7 +9,7 @@ from PyQt5.QtCore import Qt, QModelIndex, QDir, QUrl, QSortFilterProxyModel
 from PyQt5.QtGui import QIcon, QDesktopServices
 
 
-from acadia_gui.helpers import detect_platform, to_windows_path
+from acadia_qmsmt.helpers.path_adapter import detect_platform, to_windows_path
 from acadia_gui.icons import get_icon
 
 

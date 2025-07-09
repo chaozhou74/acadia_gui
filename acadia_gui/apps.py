@@ -6,6 +6,7 @@ import logging
 from PyQt5.QtWidgets import QApplication
 
 from acadia_gui.gui import DataBrowser
+from acadia_gui.utils import set_qt_scaling
 
 logger = logging.getLogger("__name__")
 def acadia_gui(root_path:str = None, instrument_station=None, dark_mode=False):
@@ -20,8 +21,9 @@ def acadia_gui(root_path:str = None, instrument_station=None, dark_mode=False):
         root_path = str(Path.home())
     else:
         root_path = str(root_path)
+    set_qt_scaling()
     app = QApplication(sys.argv)
-    window = DataBrowser(root_path, instrument_station, theme="dark" if dark_mode else "default")
+    window = DataBrowser(root_path, instrument_station, theme="dark" if dark_mode else None)
     window.show()
     sys.exit(app.exec_())
 

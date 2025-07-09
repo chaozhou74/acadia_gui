@@ -1,6 +1,8 @@
 import sys
 import logging
 import gc
+import os
+import json
 
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QMainWindow, QVBoxLayout, QSplitter,
@@ -12,6 +14,7 @@ from acadia_gui.gui import (LogViewer, InstrumentParamsViewer, YamlViewer,
                             FigureDisplayWidget, FolderTreeWidget, is_datafolder,
                             AppMenuBar, KwargsJsonViewer, GuiLogWindow, GuiLogHandler)
 from acadia_gui import THEME_PATH
+from acadia_gui.utils import set_qt_scaling, load_user_config
 from acadia_gui.icons import ICON_PATH
 
 logger = logging.getLogger(__name__)
@@ -47,7 +50,7 @@ class RightPanelTabs(QTabWidget):
 
 
 class DataBrowser(QMainWindow):
-    def __init__(self, root_path:str, client_station=None, theme:str="default", logging_level=logging.DEBUG):
+    def __init__(self, root_path:str, client_station=None, theme:str=None, logging_level=logging.DEBUG):
         """
         Main data browser gui layout
 
@@ -107,8 +110,10 @@ class DataBrowser(QMainWindow):
         self.setCentralWidget(central_widget)
 
 
-        if theme is not None:
-            self.apply_theme(theme)
+        if theme is None:
+            theme = load_user_config().get("theme") or "default"
+        
+        self.apply_theme(theme)
 
         # --- Center window on leftmost screen ---
         self.center_on_left_screen()
@@ -161,12 +166,9 @@ if __name__ == "__main__":
 
     root_path = "/home/chao/Data"
     # root_path = "/home/rsl/Data"
-
-
+    set_qt_scaling()
     app = QApplication(sys.argv)
     window = DataBrowser(root_path, inst_station)
     window.show()
     sys.exit(app.exec_())
-
-
 
