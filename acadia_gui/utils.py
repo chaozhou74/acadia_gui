@@ -33,3 +33,10 @@ def set_qt_scaling(scale=None):
 
     QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps)
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling) # Just to be safe
+
+
+def get_qt_scaling():
+    try:
+        return float(os.environ.get("QT_SCALE_FACTOR", "1.0"))
+    except ValueError:
+        return 1.0

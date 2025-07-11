@@ -240,8 +240,8 @@ class AppMenuBar(QMenuBar):
         current_scale = float(self.config.get("scale_factor", "1.0"))
         new_scale, ok = QInputDialog.getDouble(
             self, "Set GUI Scaling Factor",
-            "Recommended values:\n1.0 for 1080p\n1.5 for 2K\n2.0 for 4K",
-            value=current_scale, min=0.5, max=4.0, decimals=1
+            "Recommended values:\n1.0 for 1080p\n2.0 for 2K\n3.0 for 4K",
+            value=current_scale, min=0.5, max=5.0, decimals=1
         )
         if ok:
             self.config["scale_factor"] = str(new_scale)

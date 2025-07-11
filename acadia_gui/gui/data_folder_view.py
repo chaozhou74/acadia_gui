@@ -3,7 +3,7 @@ import subprocess
 import shutil
 from functools import wraps
 import logging
-from PyQt5.QtWidgets import (QWidget, QFileSystemModel, QTreeView, QVBoxLayout,
+from PyQt5.QtWidgets import (QWidget, QFileSystemModel, QTreeView, QVBoxLayout, QSizePolicy,
                              QPushButton, QFileDialog, QMenu, QApplication, QHBoxLayout, QMessageBox)
 from PyQt5.QtCore import Qt, QModelIndex, QDir, QUrl, QSortFilterProxyModel
 from PyQt5.QtGui import QIcon, QDesktopServices
@@ -137,6 +137,8 @@ class FolderTreeWidget(QTreeView):
         self.proxy_model.setSourceModel(self.model)
 
         self.tree = CustomTreeView(self)
+        self.tree.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
         self.tree.setModel(self.proxy_model)
         self.tree.setRootIndex(self.proxy_model.mapFromSource(self.model.index(root_path)))
         self.tree.clicked.connect(self.folder_selected)
