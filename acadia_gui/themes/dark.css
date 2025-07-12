@@ -180,6 +180,7 @@ QTreeView {
     show-decoration-selected: 1;
     selection-background-color: #3a70b2;
     selection-color: white;
+    border: 1px solid #5b5b5c;
 }
 QTreeView::item:hover {
     background-color: #444444;

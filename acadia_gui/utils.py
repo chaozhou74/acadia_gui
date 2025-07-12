@@ -28,11 +28,12 @@ def set_qt_scaling(scale=None):
 
     os.environ["QT_SCALE_FACTOR"] = str(scale)
     # These help with fractional scaling support
-    os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "1"
-    os.environ["QT_SCALE_FACTOR_ROUNDING_POLICY"] = "PassThrough"
+    if scale > 1:
+        os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "1"
+        os.environ["QT_SCALE_FACTOR_ROUNDING_POLICY"] = "PassThrough"
 
-    QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps)
-    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling) # Just to be safe
+        QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps)
+        QApplication.setAttribute(Qt.AA_EnableHighDpiScaling) # Just to be safe
 
 
 def get_qt_scaling():

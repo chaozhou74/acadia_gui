@@ -123,7 +123,7 @@ class CustomTreeView(QTreeView):
         super().mousePressEvent(event)
 
 
-class FolderTreeWidget(QTreeView):
+class FolderTreeWidget(QWidget):
     def __init__(self, root_path, on_select_callback):
         super().__init__()
         self.root_path = root_path
@@ -188,6 +188,8 @@ class FolderTreeWidget(QTreeView):
         layout.addLayout(button_row_upper)
         layout.addWidget(self.tree)
         layout.addLayout(button_row_lower)
+        layout.setContentsMargins(2, 2, 2, 2)
+        layout.setSpacing(4)
         self.setLayout(layout)
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self.open_context_menu)

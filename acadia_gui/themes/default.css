@@ -18,10 +18,21 @@ QStatusBar QLabel {
 }
 
 
+/* ========== TEXT EDIT ========== */
+ QTextEdit{
+    border: 1px solid #B0B0B0;
+}
+
+ /* ========== TABS ========== */
+/*QTabWidget::pane {*/
+/*    border: 1px solid #a3a1a1;*/
+/*}*/
+
 /* ========== TREE VIEW ========== */
 QTreeView {
     show-decoration-selected: 1;
     selection-color: white;
+    border: 1px solid #B0B0B0;
 }
 
 QTreeView::item:hover {
