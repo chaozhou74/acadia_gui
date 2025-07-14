@@ -192,10 +192,11 @@ QTreeView::indicator {
     width: 12px;
     height: 12px;
     border-radius: 3px;
+    border: 1px solid #5b5b5c;
     background-color: #3a3a3a;
 }
 QTreeView::indicator:checked {
-    image: url(../icons/blue_checkmark.svg);
+    image: url(__ICON_PATH__/blue_checkmark.svg);
     border: 1px solid #666;
 }
 
