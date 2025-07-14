@@ -1,8 +1,13 @@
 import os
+import re
 import logging
 from PyQt5.QtWidgets import QTabWidget, QTextBrowser
-from PyQt5.QtGui import QTextCharFormat, QColor
+from PyQt5.QtGui import QTextCharFormat, QColor, QFont
 from PyQt5.QtCore import QTimer
+
+QUOTED_PATTERN = re.compile(r"'[^']*'")
+FLOAT_PATTERN = re.compile(r"""(?x)(?<!\w)[-+]?(?:\d+\.\d*|\.\d+|\d+)(?:[eE][-+]?\d+)?(?![\w.])""")
+TIMESTAMP_PATTERN = re.compile(r"\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}\]")
 
 logger = logging.getLogger(__name__)
 
@@ -58,21 +63,78 @@ class LogViewer(QTabWidget):
     def _insert_with_formatting(self, browser, lines):
         browser.clear()
         cursor = browser.textCursor()
+        font = QFont("Courier New", 10)
+        browser.setFont(font)
+
+        blocks = []
+        current_block = []
+
         for line in lines:
-            fmt = QTextCharFormat()
+            if TIMESTAMP_PATTERN.match(line) and current_block:
+                blocks.append(current_block)
+                current_block = [line]
+            else:
+                current_block.append(line)
+        if current_block:
+            blocks.append(current_block)
 
-            if "ERROR" in line:
-                fmt.setForeground(QColor("#ff5555"))
-                fmt.setFontWeight(600)
-            elif "WARNING" in line:
-                fmt.setForeground(QColor("#ffaa00"))
-                fmt.setFontItalic(True)
-            elif "DEBUG" in line:
-                fmt.setForeground(QColor("#559999"))
-            # else:
-            #     fmt.setForeground(QColor("#000000"))
+        for block in blocks:
+            block_text = ''.join(block)
 
-            cursor.insertText(line, fmt)
+            # === Base format per block ===
+            base_fmt = QTextCharFormat()
+
+            if "ERROR" in block_text:
+                base_fmt.setForeground(QColor("#ff5555"))
+                base_fmt.setFontWeight(QFont.Bold)
+            elif "WARNING" in block_text:
+                base_fmt.setForeground(QColor("#ffaa00"))
+                base_fmt.setFontItalic(True)
+            elif "DEBUG" in block_text:
+                base_fmt.setForeground(QColor("#559999"))
+
+            for line in block:
+                tokens = []
+                last_index = 0
+
+                # Timestamp
+                ts_match = TIMESTAMP_PATTERN.search(line)
+                if ts_match:
+                    start, end = ts_match.span()
+                    if start > last_index:
+                        tokens.append((line[last_index:start], base_fmt))
+                    ts_fmt = QTextCharFormat()
+                    ts_fmt.setForeground(QColor("#777777"))
+                    tokens.append((ts_match.group(), ts_fmt))
+                    last_index = end
+
+                # Floats and quoted strings
+                remaining = line[last_index:]
+                rel_index = 0
+                for match in sorted(
+                        list(QUOTED_PATTERN.finditer(remaining)) + list(FLOAT_PATTERN.finditer(remaining)),
+                        key=lambda m: m.start()
+                ):
+                    if match.start() > rel_index:
+                        tokens.append((remaining[rel_index:match.start()], base_fmt))
+
+                    token_text = match.group()
+                    token_fmt = QTextCharFormat(base_fmt)
+                    if QUOTED_PATTERN.fullmatch(token_text):
+                        token_fmt.setForeground(QColor("#c586c0"))
+                    elif FLOAT_PATTERN.fullmatch(token_text):
+                        token_fmt.setForeground(QColor("#4fc1ff"))
+
+                    tokens.append((token_text, token_fmt))
+                    rel_index = match.end()
+
+                if rel_index < len(remaining):
+                    tokens.append((remaining[rel_index:], base_fmt))
+
+                for text, fmt in tokens:
+                    cursor.insertText(text, fmt)
+
+        browser.moveCursor(cursor.End)
 
     def reload_tab(self, index):
         fname = self.tabText(index)
@@ -110,3 +172,4 @@ class LogViewer(QTabWidget):
             if widget:
                 widget.deleteLater()
             self.removeTab(0)
+
