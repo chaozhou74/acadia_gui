@@ -1,4 +1,4 @@
-from typing import Union, Literal
+from typing import Union, Literal, Annotated
 
 import numpy as np
 
@@ -127,6 +127,7 @@ class ResonatorSpectroscopyTestGuiRuntime(QMsmtRuntime):
     # as input fields in the GUI. Two special typehints are recognized:
     # - `bool` or `Bool`: shown as a checkbox
     # - `Literal[...]`: shown as a dropdown menu with options
+    # - `Annotated[type, "key_word", metadata]`: Allows for custom Qt Objects (key_word) to be added to the layout. 
     @annotate_method(is_data_processor=True)
     def process_current_data(self, e_delay: float = 76e-9, auto_edelay: bool = False):
         """
@@ -224,7 +225,6 @@ class ResonatorSpectroscopyTestGuiRuntime(QMsmtRuntime):
         # *** IMPORTANT: the `save_registered_plots` is expecting this function to return the fig and axs to do the saving ***
         return fig, axs
 
-
     # --- Dummy example #2: figure‑based layout --------------------------
     @annotate_method(plot_name="test_2_fig_based")
     def plot_test2(self, fig=None, ax1_label=1, ax2_color: Literal["r", "g", "b"] = "g"):
@@ -246,7 +246,57 @@ class ResonatorSpectroscopyTestGuiRuntime(QMsmtRuntime):
             ax.legend()
 
         return fig, axs
+    
+    @annotate_method(plot_name="test_2_fig_based")
+    def plot_test2(self, fig=None, ax1_label=1, ax2_color: Literal["r", "g", "b"] = "g"):
+        """Now we own the `Figure` and we can lay it out however we like."""
+        from matplotlib.pyplot import figure
+        fig = figure() if fig is None else fig
 
+        # make a layout with to rows on the left and one plot on the right
+        gs = fig.add_gridspec(2, 2)
+        ax_tl = fig.add_subplot(gs[0, 0])
+        ax_bl = fig.add_subplot(gs[1, 0])
+        ax_r  = fig.add_subplot(gs[:, 1])
+        axs = [ax_tl, ax_bl, ax_r]
+
+        ax_tl.plot(self.frequencies, self.avg_iq.real, label=str(ax1_label))
+        ax_bl.plot(self.frequencies, self.avg_iq.imag, color=ax2_color)
+        ax_r.plot(self.avg_iq.real, self.avg_iq.imag)
+        for ax in axs:
+            ax.legend()
+
+        return fig, axs
+    
+    # --- Dummy example 3: Using Annotated type to create a slider. Sliders are mostly helpful for 2D sweeps for taking linecuts.
+    #     The slider will show up with a line editor to the left of it indicating the current value, which can also be changed in
+    #     the line editor, and rounded to the closest element in the array. 
+
+    #     Please note that currently sliders only work for float/int arrays. 
+    @annotate_method(plot_name='dummy 2D sweep')
+    def plot_test3(self, fig=None, apply_e_delay:bool=True, freq = Annotated[float, "slider", "self.frequencies"]=None):
+        from acadia_qmsmt.plotting import prepare_plot_axes
+        fig, axs = prepare_plot_axes(fig)
+        # Note that freq which represents the slider value comes in as an index which makes sure the slider has linear ticks.
+        # However, it is assumed that if a value is provided for the parameter it is interperted as the frequency value (a little confusing but it only matters
+        # for the instantiation of the plot and you can simply manually change the value in the gui.) 
+        freq = 0 if freq is None else np.argmin(np.abs(self.frequencies - freq))
+        freq_idx = freq
+
+        # Simulating a 2d sweep with random data.
+        amplitudes = np.linspace(0.0, 0.9, len(self.frequencies))  # you control how many amplitude steps
+
+        # Create 2D noise array: shape (len(frequencies), len(amplitudes))
+        noise_array = np.random.normal(loc=0.0, scale=1.0, size=(len(self.frequencies), len(amplitudes)))
+
+        # Optional: scale noise by amplitude
+        # Each column gets scaled by its amplitude
+        scaled_noise = noise_array * amplitudes
+        axs.plot(amplitudes, scaled_noise[freq_idx,:])
+        return fig, axs
+
+
+    
     # --- Real plot 1: amplitude & phase vs. DAC --------------------------
     @annotate_method(plot_name="mag_phase_vs_dac", axs_shape=(2, 1))
     def plot_data(self, axs=None, apply_e_delay: bool = True, unwrap_phase: bool = True):
@@ -333,7 +383,6 @@ class ResonatorSpectroscopyTestGuiRuntime(QMsmtRuntime):
 
         fig.tight_layout()
         return fig, axs
-
 
     # ==================================================================================================
     #                             Example button methods
