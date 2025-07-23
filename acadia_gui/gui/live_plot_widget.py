@@ -775,22 +775,37 @@ class LivePlotWidget(QWidget):
         slider.setValue(init_idx)
         slider.setTickPosition(QSlider.TicksBothSides)
         slider.setTickInterval(1)
-
-        lineedit = QLineEdit(f"{values[init_idx]:.4f}")
-        lineedit.setFixedWidth(60)
+        init_val = values[init_idx]
+        if abs(init_val) < 1e-3 or abs(init_val) >= 1e+4:
+            init_val_str = f"{init_val:.4e}"  # Scientific for very small or large numbers
+        else:
+            init_val_str = f"{init_val:.4f}"  # Standard format otherwise
+        lineedit = QLineEdit(init_val_str)
+        lineedit.setFixedWidth(80)
 
         def slider_changed(i):
             val = values[i]
-            lineedit.setText(f"{val:.4f}")
+            if abs(val) < 1e-3 or abs(val) >= 1e+4:
+                val_str = f"{val:.4e}"  # Scientific for very small or large numbers
+            else:
+                val_str = f"{val:.4f}"  # Standard format otherwise
+            
+            lineedit.setText(val_str)
             self.update_plot(force=True)
+
         slider.valueChanged.connect(slider_changed)
 
         def lineedit_changed():
             try:
                 val = float(lineedit.text())
-                lineedit.setText(f"{val:.4f}")
+                if abs(val) < 1e-3 or abs(val) >= 1e+4:
+                    val_str = f"{val:.4e}"  # Scientific for very small or large numbers
+                else:
+                    val_str = f"{val:.4f}"  # Standard format otherwise
+                lineedit.setText(val_str)
                 idx = np.argmin(np.abs(values - val))
                 slider.setValue(idx)
+
             except Exception:
                 pass
             self.update_plot(force=True)
