@@ -1,13 +1,11 @@
 import os
 import time
 import inspect
-import warnings
 from functools import partial
 from typing import Iterable, Union, get_type_hints, Literal, get_args, Annotated, get_origin
 from collections import defaultdict
 import subprocess
 import logging
-import gc
 from pathlib import Path
 
 import numpy as np
@@ -27,8 +25,8 @@ from PyQt5.QtGui import QImage, QPainter, QFont, QIcon
 from acadia_qmsmt.helpers.saved_runtime_loader import insert_saved_qmsmt_module, get_saved_runtime_class
 from acadia_qmsmt.helpers import get_registered_plot_methods, get_data_process_method, get_registered_button_methods
 from acadia_qmsmt.helpers.annotation import AXS_SHAPE_TAG, get_registered_methods, get_registered_customizer
+from acadia_qmsmt.helpers.path_adapter import to_windows_path, detect_platform
 
-from acadia_gui.helpers.path_adapter import to_windows_path, detect_platform
 from acadia_gui.icons import get_icon
 
 
@@ -162,7 +160,6 @@ def make_kwarg_box(title):
     layout = QVBoxLayout()
     box.setLayout(layout)
     return box, layout
-
 
 class LivePlotWidget(QWidget):
     def __init__(self, poll_interval_sec=2, update_indicator_file=UPDATE_INDICATOR_FILE,
@@ -992,13 +989,37 @@ class LivePlotWidget(QWidget):
         # --- Call the registered plot method to make a new plot ---
         method_name = self.plot_registry.get(self.current_plot_name)
         if method_name and hasattr(self.rt, method_name):
-            plot_func = getattr(self.rt, method_name)
-            plot_kwargs = parse_inputs(self.plot_inputs)
-            axs = fig.subplots(*self.current_plot_axs_shape)
-            plot_func(axs=axs, **plot_kwargs)
+            try:
+                plot_func = getattr(self.rt, method_name)
+                plot_kwargs = parse_inputs(self.plot_inputs)
+                if self.current_plot_uses_axs:
+                    axs = fig.subplots(*self.current_plot_axs_shape)
+                    fig, axs = plot_func(axs=axs, **plot_kwargs)
+                else:
+                    fig, axs = plot_func(fig=fig, **plot_kwargs)
+
+                # --- apply right-click options and set the x/ylim of the snapshot to be the same as the current figure
+                current_axs = self.canvas.figure.get_axes()
+                for idx, (ax_snap, ax_now) in enumerate(zip(np.asarray(axs).flat, np.asarray(current_axs).flat)):
+                    # apply right-click options
+                    key = (self.current_plot_name, idx)
+                    for label, _, handler in self.right_click_actions:
+                        if label in self.checked_right_click_flags[key]:
+                            handler(ax_snap)
+                    # set x/ylim
+                    ax_snap.set_xlim(*(ax_now.get_xlim()))
+                    ax_snap.set_ylim(*(ax_now.get_ylim()))
+
+                fig.tight_layout()
+
+            except Exception as e:
+                logger.error(f"Failed to remake plot '{self.current_plot_name}' for snapshot: {e}", exc_info=True)
+                return
+
         else:
             logger.error("Plot method not found.")
             return
+        
 
         # --- Draw canvas and grab as raw buffer ---
         canvas.draw()

@@ -1,23 +1,28 @@
 import sys
 import logging
 import gc
+import os
+import json
 
 from PyQt5.QtWidgets import (
-    QApplication, QWidget, QMainWindow, QVBoxLayout, QSplitter,
+    QApplication, QWidget, QMainWindow, QVBoxLayout, QSplitter, QSizePolicy,
     QTabWidget
 )
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QTimer
 
 from acadia_gui.gui import (LogViewer, InstrumentParamsViewer, YamlViewer,
                             FigureDisplayWidget, FolderTreeWidget, is_datafolder,
                             AppMenuBar, KwargsJsonViewer, GuiLogWindow, GuiLogHandler)
 from acadia_gui import THEME_PATH
+from acadia_gui.utils import set_qt_scaling, load_user_config, get_qt_scaling
 from acadia_gui.icons import ICON_PATH
 
 logger = logging.getLogger(__name__)
 
+
 def force_garbage_collect():
     collected = gc.collect()
+
 
 class RightPanelTabs(QTabWidget):
     def __init__(self, client_station=None):
@@ -26,7 +31,6 @@ class RightPanelTabs(QTabWidget):
         self.instruments_tab = InstrumentParamsViewer(client_station)
         self.log_tab = LogViewer()
         self.kwargs_json_tab = KwargsJsonViewer()
-
 
         self.addTab(self.config_yaml_tab, "Config YAMLs")
         self.addTab(self.kwargs_json_tab, "Kwargs")
@@ -47,7 +51,7 @@ class RightPanelTabs(QTabWidget):
 
 
 class DataBrowser(QMainWindow):
-    def __init__(self, root_path:str, client_station=None, theme:str="default", logging_level=logging.DEBUG):
+    def __init__(self, root_path: str, client_station=None, theme: str = None, logging_level=logging.DEBUG):
         """
         Main data browser gui layout
 
@@ -74,16 +78,18 @@ class DataBrowser(QMainWindow):
         self.right_tabs = RightPanelTabs(client_station)
 
         # --- Right column: image + params ---
-        right_splitter = QSplitter(Qt.Horizontal)
-        right_splitter.addWidget(self.figure_display)
-        right_splitter.addWidget(self.right_tabs)
-        right_splitter.setSizes([850, 400])
+        self.right_splitter = QSplitter(Qt.Horizontal)
+        self.right_splitter.addWidget(self.figure_display)
+        self.right_splitter.addWidget(self.right_tabs)
+        # size debugging
+        # self.figure_display.setStyleSheet("border: 2px solid red;")
+        # self.right_tabs.setStyleSheet("border: 2px solid green;")
+        # self.right_splitter.setStyleSheet("border: 2px dashed blue;")
 
         # --- Top-level splitter: tree | main view ---
-        main_splitter = QSplitter(Qt.Horizontal)
-        main_splitter.addWidget(self.folder_tree)
-        main_splitter.addWidget(right_splitter)
-        main_splitter.setSizes([250, 1250])
+        self.main_splitter = QSplitter(Qt.Horizontal)
+        self.main_splitter.addWidget(self.folder_tree)
+        self.main_splitter.addWidget(self.right_splitter)
 
         # ---- log window ------------
         self.log_window = GuiLogWindow(self)
@@ -95,24 +101,23 @@ class DataBrowser(QMainWindow):
         logging.getLogger().setLevel(logging_level)
 
         # --- Main layout ---
-        outer_splitter = QSplitter(Qt.Vertical)
-        outer_splitter.addWidget(main_splitter)
-        outer_splitter.addWidget(self.log_window)
-        outer_splitter.setSizes([800, 200])  # Adjust as needed
+        self.outer_splitter = QSplitter(Qt.Vertical)
+        self.outer_splitter.addWidget(self.main_splitter)
+        self.outer_splitter.addWidget(self.log_window)
 
         central_widget = QWidget()
         central_layout = QVBoxLayout(central_widget)
-        central_layout.addWidget(outer_splitter)
+        central_layout.addWidget(self.outer_splitter)
         central_widget.setLayout(central_layout)
         self.setCentralWidget(central_widget)
 
+        if theme is None:
+            theme = load_user_config().get("theme") or "default"
 
-        if theme is not None:
-            self.apply_theme(theme)
+        self.apply_theme(theme)
 
         # --- Center window on leftmost screen ---
         self.center_on_left_screen()
-
 
     def center_on_left_screen(self):
         screens = QApplication.screens()
@@ -134,10 +139,9 @@ class DataBrowser(QMainWindow):
         self.figure_display.load_images(folder_path)
         self.right_tabs.update_content(folder_path)
 
-
     def apply_theme(self, theme_name):
         try:
-            theme_path = THEME_PATH/ theme_name
+            theme_path = THEME_PATH / theme_name
             if theme_path.suffix != '.css':
                 theme_path = theme_path.with_suffix('.css')
             with open(theme_path, "r") as f:
@@ -151,6 +155,19 @@ class DataBrowser(QMainWindow):
         # forward to central matplotlib plot
         self.figure_display.set_theme(theme_name)
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        QTimer.singleShot(0, self.adjust_splitter_sizes)
+
+    def adjust_splitter_sizes(self):
+        folder_width = 250
+        right_main_width = self.width() - folder_width
+
+        self.main_splitter.setSizes([folder_width, right_main_width])
+        self.right_splitter.setSizes([int(0.7 * right_main_width), int(0.3 * right_main_width)])
+        self.outer_splitter.setSizes([int(self.height() * 0.8), int(self.height() * 0.2)])
+
+
 
 if __name__ == "__main__":
     # example code for starting the main data browser gui app window
@@ -161,12 +178,9 @@ if __name__ == "__main__":
 
     root_path = "/home/chao/Data"
     # root_path = "/home/rsl/Data"
-
-
+    set_qt_scaling()
     app = QApplication(sys.argv)
     window = DataBrowser(root_path, inst_station)
     window.show()
     sys.exit(app.exec_())
-
-
 

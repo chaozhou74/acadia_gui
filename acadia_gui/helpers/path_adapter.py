@@ -1,9 +1,5 @@
-from typing import Literal
-import platform
-import subprocess
-import re
 import warnings
 
-from acadia_qmsmt.helpers.path_adapter import *
+warnings.warn("This module is deprecated, use functions in `acadia_qmsmt.helpers.path_adapter` instead", DeprecationWarning)
 
-DeprecationWarning("This module is deprecated, use functions in `acadia_qmsmt.helpers.path_adapter` instead")
+from acadia_qmsmt.helpers.path_adapter import detect_platform, to_windows_path, to_local_path
