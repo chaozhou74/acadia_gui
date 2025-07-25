@@ -49,7 +49,7 @@ def parse_inputs(input_dict):
             kwargs[k] = w.currentText()
         elif isinstance(w, QLineEdit):
             try:
-                val = eval(w.text()) 
+                val = eval(w.text())
                 kwargs[k] = val
             except Exception:
                 kwargs[k] = w.text()
@@ -289,7 +289,7 @@ class LivePlotWidget(QWidget):
         self.stop_button.setFixedWidth(80)
         self.stop_button.clicked.connect(self.drop_stop_flag)
 
-# Show ticks for every 10th value
+
         progress_row = QHBoxLayout()
         progress_row.addWidget(self.progress_bar)
         progress_row.addWidget(self.stop_button)
@@ -664,14 +664,14 @@ class LivePlotWidget(QWidget):
                 if get_origin(arg) is Annotated:
                     annotation = arg
             if len(get_args(annotation)) < 3:
-                logger.warning("Annotated args must contain at least 3 items: (type, desc, *metadata)")
+                logger.error("Annotated args must contain at least 3 items: (type, desc, *metadata)")
                 return None
             type_hint, desc, *metadata = get_args(annotation)
             match desc:
                 case "slider":
-                    widget = self._slider(default, *metadata)
+                    widget = self._make_slider_widget(default, *metadata)
                 case _:
-                    logger.warning(f"Unsupported Annotated description: {desc}")
+                    logger.error(f"Unsupported Annotated description: {desc}")
                     return None
 
         else: # generic inputs
@@ -693,7 +693,7 @@ class LivePlotWidget(QWidget):
         if isinstance(widget, tuple) or isinstance(widget, list):
             for widg in widget:
                 row_layout.addWidget(widg)
-            return widget[0]
+            return widget[0] # assuming the first widget always has a gettable value
         else:
             row_layout.addWidget(widget)
             return widget
@@ -718,8 +718,9 @@ class LivePlotWidget(QWidget):
             annotation = type_hints.get(name, None)
 
             # Add input pair
-            self.add_kwarg_input(row_layout, name, default, annotation)
-            widgets[name] = row_layout.itemAt(row_layout.count() - 1).widget()
+            widget = self.add_kwarg_input(row_layout, name, default, annotation)
+            if widget is not None:
+                widgets[name] = widget
 
             # Add spacing between pairs
             row_layout.addSpacing(20)
@@ -736,19 +737,19 @@ class LivePlotWidget(QWidget):
         group_box.setVisible(bool(widgets))
         return widgets
 
-    def _slider(self, default, *metadata):
+    def _make_slider_widget(self, default, *metadata):
         if len(metadata) != 1:
             logger.warning("Slider metadata must contain exactly one item of type str")
         if isinstance(metadata[0], str):
             if metadata[0].startswith("self."):
                 arg = metadata[0][5:]  # remove "self." prefix
                 if not hasattr(self.rt, arg):
-                    logger.warning(f"Runtime does not have attribute '{arg}' for slider")
+                    logger.error(f"Runtime does not have attribute '{arg}' for slider")
                     return None
                 values = np.array(self.rt.__getattribute__(arg))
             else:
                 # can implement other metadata types here
-                logger.warning(f"Unsupported slider metadata type: {type(metadata[0])}")
+                logger.error(f"Unsupported slider metadata type: {type(metadata[0])}")
                 return None
 
         elif isinstance(metadata[0], (list, np.ndarray)):
