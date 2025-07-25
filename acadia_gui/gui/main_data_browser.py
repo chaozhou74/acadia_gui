@@ -62,7 +62,6 @@ class DataBrowser(QMainWindow):
         :param logging_level: Logging level for the global logger. It is recommended to set this to the lowest
             level (e.g., DEBUG) and use log handlers within the GUI to filter messages as needed.
         """
-        # todo: add code view
 
         super().__init__()
         self.setWindowTitle("Data Browser")

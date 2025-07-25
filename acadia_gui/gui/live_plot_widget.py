@@ -2,7 +2,7 @@ import os
 import time
 import inspect
 from functools import partial
-from typing import Iterable, Union, get_type_hints, Literal, get_args, Annotated, get_origin
+from typing import Iterable, Union, Callable, Literal, Annotated, get_type_hints, get_args, get_origin
 from collections import defaultdict
 import subprocess
 import logging
@@ -362,7 +362,8 @@ class LivePlotWidget(QWidget):
         if hasattr(self.rt, self.data_processor_name):
             processor_func = getattr(self.rt, self.data_processor_name)
             self.process_inputs = self.create_inputs_from_signature(processor_func, self.process_kwargs_layout,
-                                                                    self.process_kwargs_box)
+                                                                    self.process_kwargs_box,
+                                                                    update_callback=lambda: self.update_plot(force=True))
             self.update_buttons = self.create_update_buttons()
 
         # Disable STOP button if .stop file already exists
@@ -452,7 +453,8 @@ class LivePlotWidget(QWidget):
                 self.last_axs_shape = None
 
             self.plot_inputs = self.create_inputs_from_signature(plot_func, self.plot_kwargs_layout,
-                                                                 self.plot_kwargs_box)
+                                                                 self.plot_kwargs_box,
+                                                                 update_callback=lambda: self.update_plot(force=True, reprocess_data=False))
         self.checked_right_click_flags.clear()
 
         # if we already have data, just redo plot
@@ -467,75 +469,91 @@ class LivePlotWidget(QWidget):
             self.update_plot(force=True)
 
 
-    def update_plot(self, force=False):
-        if not self.ready:
+    def update_plot(self, force=False, reprocess_data=True):
+        """
+        Update the current selected plot.
+
+        :param force: When True, force remake plot regardless of whether there is new data/if the plot is paused.
+        :param reprocess_data: When True, re-run data processing method before plotting
+        :return:
+        """
+        # do nothing if the data is not ready yet
+        if not self.ready or not self.data_path or not self.current_plot_name:
             return
 
         # Disable STOP button if .stop file is present (e.g., created externally)
         self.update_stop_button_state()
 
-        if self.is_paused or not self.data_path or not self.current_plot_name:
+        # do nothing if plot is paused and not force update
+        if not force and self.is_paused:
             return
 
-        try:
-            current_mtime = self.get_latest_update_time()
-            if not force and current_mtime <= self.last_mtime:
-                return
-            self.last_mtime = current_mtime
+        # do nothing if there is no new data and not force update
+        current_mtime = self.get_latest_update_time()
+        if not force and current_mtime <= self.last_mtime:
+            return
 
-            # reload runtime data
+        self.last_mtime = current_mtime
+
+        if reprocess_data:
             try:
-                getattr(self.rt, DATAMANAGER_ATTRIBUTE).load(self.data_path)
-            except Exception as e:
-                logger.warning(f"Failed to load data from existing runtime: {e}. Attempting full reload...",
-                               exc_info=True)
+                # reload runtime data
                 try:
-                    self.rt = self.runtime_class.load(self.data_path)
-                    logger.info(f"Reloaded runtime from {self.data_path}")
-                except Exception as e2:
-                    logger.error(f"Failed to reload runtime: {e2}", exc_info=True)
+                    getattr(self.rt, DATAMANAGER_ATTRIBUTE).load(self.data_path)
+                except Exception as e:
+                    logger.warning(f"Failed to load data from existing runtime: {e}. Attempting full reload...",
+                                   exc_info=True)
+                    try:
+                        self.rt = self.runtime_class.load(self.data_path)
+                        logger.info(f"Reloaded runtime from {self.data_path}")
+                    except Exception as e2:
+                        logger.error(f"Failed to reload runtime: {e2}", exc_info=True)
+                        return
+
+                completed_iter = None
+                if hasattr(self.rt, self.data_processor_name):
+                    processor_func = getattr(self.rt, self.data_processor_name)
+                    proc_kwargs = parse_inputs(self.process_inputs)
+                    try:
+                        completed_iter = processor_func(**proc_kwargs)
+                    except Exception as e:
+                        logger.error(f"Error in data processing funciton "
+                                     f"`{self.runtime_class.__name__}.{self.data_processor_name}`: {e}", exc_info=True)
+                    self.refresh_update_button_methods()
+
+                else:
+                    self.progress_bar.setFormat(
+                        f"Missing processor: {self.data_processor_name}"
+                    )
+                    logger.error(f"Missing data processor: {self.data_processor_name} in {self.runtime_class.__name__}")
                     return
 
-            completed_iter = None
-            if hasattr(self.rt, self.data_processor_name):
-                processor_func = getattr(self.rt, self.data_processor_name)
-                proc_kwargs = parse_inputs(self.process_inputs)
-                try:
-                    completed_iter = processor_func(**proc_kwargs)
-                except Exception as e:
-                    logger.error(f"Error in data processing funciton "
-                                 f"`{self.runtime_class.__name__}.{self.data_processor_name}`: {e}", exc_info=True)
-                self.refresh_update_button_methods()
+                if completed_iter is not None:
+                    self._update_progress_bar(completed_iter)
+                    self.completed_iter = completed_iter
+                else:
+                    self.progress_bar.setValue(0)
+                    self.progress_bar.setFormat(
+                        f"'{self.rt.__class__.__name__}.{self.data_processor_name}' did not return a valid iteration count"
+                    )
 
-            else:
-                self.progress_bar.setFormat(
-                    f"Missing processor: {self.data_processor_name}"
-                )
-                logger.error(f"Missing data processor: {self.data_processor_name} in {self.runtime_class.__name__}")
-                return
+            except Exception as e:
+                self.progress_bar.setValue(0)
+                self.progress_bar.setFormat(f"Error: {str(e)}")
+                logger.error(e, exc_info=True)
 
-            # Get selected plot method
-            method_name = self.plot_registry.get(self.current_plot_name)
-            if not method_name:
-                return
 
-            if completed_iter is not None:
+        # make plot
+        method_name = self.plot_registry.get(self.current_plot_name)
+        if not method_name:
+            return
+        if self.completed_iter is not None:
+            try:
                 # Call plot into ax
                 axs = self.make_plot(self.canvas.figure, method_name, prepare_pcm=True, force_remake_axes=force)
                 self.canvas.draw()
-                self._update_progress_bar(completed_iter)
-            else:
-                self.progress_bar.setValue(0)
-                self.progress_bar.setFormat(
-                    f"'{self.rt.__class__.__name__}.{self.data_processor_name}' did not return a valid iteration count"
-                )
-
-            self.completed_iter = completed_iter
-
-        except Exception as e:
-            self.progress_bar.setValue(0)
-            self.progress_bar.setFormat(f"Error: {str(e)}")
-            logger.error(e, exc_info=True)
+            except Exception as e:
+                logger.error(f"Error making plot '{method_name}': {e}", exc_info=True)
 
 
     def make_plot(self, figure: Figure, plot_method_name: str, prepare_pcm=False, force_remake_axes=False):
@@ -640,14 +658,16 @@ class LivePlotWidget(QWidget):
             return any(get_origin(arg) is Annotated for arg in get_args(annotation))
         return False
 
-    def add_kwarg_input(self, row_layout: QHBoxLayout, label: str, default="", annotation=None):
+    def add_kwarg_input(self, row_layout: QHBoxLayout, label: str, default="",
+                        annotation=None, update_callback:Callable=None):
         label_widget = QLabel(label)
         widget = None
         # input fields with type hint bool will show as check box
         if annotation is bool:
             widget = QCheckBox()
             widget.setChecked(bool(default))
-            widget.stateChanged.connect(lambda: self.update_plot(force=True))
+            if update_callback is not None:
+                widget.stateChanged.connect(update_callback)
 
         # input fields with type hint Literal will show as combobox (drop down menu)
         elif get_origin(annotation) is Literal:
@@ -657,7 +677,8 @@ class LivePlotWidget(QWidget):
             widget.addItems([str(c) for c in choices])
             if default in choices:
                 widget.setCurrentText(str(default))
-            widget.currentIndexChanged.connect(lambda: self.update_plot(force=True))
+            if update_callback is not None:
+                widget.currentIndexChanged.connect(update_callback)
 
         elif self.is_annotated_type(annotation):
             for arg in get_args(annotation):
@@ -669,7 +690,7 @@ class LivePlotWidget(QWidget):
             type_hint, desc, *metadata = get_args(annotation)
             match desc:
                 case "slider":
-                    widget = self._make_slider_widget(default, *metadata)
+                    widget = self._make_slider_widget(default, *metadata, update_callback=update_callback)
                 case _:
                     logger.error(f"Unsupported Annotated description: {desc}")
                     return None
@@ -684,7 +705,8 @@ class LivePlotWidget(QWidget):
                     widget.setText(str(val))
                 except Exception:
                     pass
-                self.update_plot(force=True)
+                if update_callback is not None:
+                    update_callback()
 
             widget.returnPressed.connect(handle_return)
 
@@ -698,7 +720,8 @@ class LivePlotWidget(QWidget):
             row_layout.addWidget(widget)
             return widget
 
-    def create_inputs_from_signature(self, func, layout: QVBoxLayout, group_box: QGroupBox):
+    def create_inputs_from_signature(self, func, layout: QVBoxLayout, group_box: QGroupBox,
+                                     update_callback:Callable=None):
         clear_layout(layout)
 
         # --- Parse signature and type hints ---
@@ -718,7 +741,7 @@ class LivePlotWidget(QWidget):
             annotation = type_hints.get(name, None)
 
             # Add input pair
-            widget = self.add_kwarg_input(row_layout, name, default, annotation)
+            widget = self.add_kwarg_input(row_layout, name, default, annotation, update_callback=update_callback)
             if widget is not None:
                 widgets[name] = widget
 
@@ -737,7 +760,7 @@ class LivePlotWidget(QWidget):
         group_box.setVisible(bool(widgets))
         return widgets
 
-    def _make_slider_widget(self, default, *metadata):
+    def _make_slider_widget(self, default, *metadata, update_callback=None):
         if len(metadata) != 1:
             logger.warning("Slider metadata must contain exactly one item of type str")
         if isinstance(metadata[0], str):
@@ -789,7 +812,8 @@ class LivePlotWidget(QWidget):
                 val_str = f"{val:.4f}"  # Standard format otherwise
             
             lineedit.setText(val_str)
-            self.update_plot(force=True)
+            if update_callback is not None:
+                update_callback()
 
         slider.valueChanged.connect(slider_changed)
 
@@ -804,11 +828,10 @@ class LivePlotWidget(QWidget):
                 idx = np.argmin(np.abs(values - val))
                 slider.setValue(idx)
 
-            except Exception:
-                pass
-            self.update_plot(force=True)
+            except Exception as e:
+                logger.error(f"Error setting slider value: {metadata}, {e}", exc_info=True)
+
         lineedit.returnPressed.connect(lineedit_changed)
-        lineedit.editingFinished.connect(lineedit_changed)
 
         return (lineedit, slider)
     
@@ -1211,7 +1234,7 @@ class LivePlotWidget(QWidget):
         else:
             mpl_style.use("default")
 
-        self.update_plot(force=True)
+        self.update_plot(force=True, reprocess_data=False)
 
     # ------------- clear -----------------
     def clear(self):

@@ -138,6 +138,7 @@ class ResonatorSpectroscopyTestGuiRuntime(QMsmtRuntime):
         :param auto_edelay:
         :return:
         """
+        logger.debug("Process function called!!!")
 
         # ------ gather the data ----------------------------
         # Reshape the raw IQ data into a convenient array format using a helper
@@ -259,6 +260,7 @@ class ResonatorSpectroscopyTestGuiRuntime(QMsmtRuntime):
         In this example, 'slider' specifies the widget type, and 'self.frequencies' is parsed by the GUI to retrieve 
         `rt.frequencies` and create a slider based on those frequency values.
         """
+        logger.debug("'plot_test3' function called!!!")
         from acadia_qmsmt.plotting import prepare_plot_axes
 
         fig, axs = prepare_plot_axes(fig)
