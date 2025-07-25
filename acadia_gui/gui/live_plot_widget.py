@@ -2,7 +2,7 @@ import os
 import time
 import inspect
 from functools import partial
-from typing import get_type_hints, Literal, get_args
+from typing import Iterable, Union, get_type_hints, Literal, get_args, Annotated, get_origin
 from collections import defaultdict
 import subprocess
 import logging
@@ -16,7 +16,7 @@ from matplotlib.ticker import ScalarFormatter
 
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QWidgetAction, QMenu, QAction, QApplication, QToolButton, QPushButton,
-    QProgressBar, QLineEdit, QLabel, QComboBox, QGroupBox, QGridLayout, QCheckBox, QSizePolicy, QFrame
+    QProgressBar, QLineEdit, QLabel, QComboBox, QGroupBox, QGridLayout, QCheckBox, QSizePolicy, QFrame, QSlider
 )
 from PyQt5.QtCore import QTimer, Qt, QSize
 from PyQt5 import QtCore, QtGui
@@ -53,6 +53,8 @@ def parse_inputs(input_dict):
                 kwargs[k] = val
             except Exception:
                 kwargs[k] = w.text()
+        elif isinstance(w, QSlider):
+            kwargs[k] = w.value()
         else:
             kwargs[k] = w.text()  # fallback
     return kwargs
@@ -629,10 +631,18 @@ class LivePlotWidget(QWidget):
 
 
     # ----------- kwarg inputs ------------------------------------------
+    def is_annotated_type(self, annotation):
+        origin = get_origin(annotation)
+        if origin is Annotated:
+            return True
+        if origin is Union:
+            # Check if any of the union args are Annotated
+            return any(get_origin(arg) is Annotated for arg in get_args(annotation))
+        return False
+
     def add_kwarg_input(self, row_layout: QHBoxLayout, label: str, default="", annotation=None):
         label_widget = QLabel(label)
         widget = None
-
         # input fields with type hint bool will show as check box
         if annotation is bool:
             widget = QCheckBox()
@@ -640,7 +650,7 @@ class LivePlotWidget(QWidget):
             widget.stateChanged.connect(lambda: self.update_plot(force=True))
 
         # input fields with type hint Literal will show as combobox (drop down menu)
-        elif hasattr(annotation, '__origin__') and annotation.__origin__ is Literal:
+        elif get_origin(annotation) is Literal:
             widget = QComboBox()
             widget.setObjectName("kwarg_combo_box")
             choices = get_args(annotation)
@@ -648,6 +658,21 @@ class LivePlotWidget(QWidget):
             if default in choices:
                 widget.setCurrentText(str(default))
             widget.currentIndexChanged.connect(lambda: self.update_plot(force=True))
+
+        elif self.is_annotated_type(annotation):
+            for arg in get_args(annotation):
+                if get_origin(arg) is Annotated:
+                    annotation = arg
+            if len(get_args(annotation)) < 3:
+                logger.error("Annotated args must contain at least 3 items: (type, desc, *metadata)")
+                return None
+            type_hint, desc, *metadata = get_args(annotation)
+            match desc:
+                case "slider":
+                    widget = self._make_slider_widget(default, *metadata)
+                case _:
+                    logger.error(f"Unsupported Annotated description: {desc}")
+                    return None
 
         else: # generic inputs
             widget = QLineEdit()
@@ -665,15 +690,20 @@ class LivePlotWidget(QWidget):
 
         # Add label and widget side by side
         row_layout.addWidget(label_widget)
-        row_layout.addWidget(widget)
-        return widget
+        if isinstance(widget, tuple) or isinstance(widget, list):
+            for widg in widget:
+                row_layout.addWidget(widg)
+            return widget[0] # assuming the first widget always has a gettable value
+        else:
+            row_layout.addWidget(widget)
+            return widget
 
     def create_inputs_from_signature(self, func, layout: QVBoxLayout, group_box: QGroupBox):
         clear_layout(layout)
 
         # --- Parse signature and type hints ---
         sig = inspect.signature(func)
-        type_hints = get_type_hints(func)
+        type_hints = get_type_hints(func, include_extras=True)
 
         widgets = {}
         row_layout = QHBoxLayout()
@@ -688,8 +718,9 @@ class LivePlotWidget(QWidget):
             annotation = type_hints.get(name, None)
 
             # Add input pair
-            self.add_kwarg_input(row_layout, name, default, annotation)
-            widgets[name] = row_layout.itemAt(row_layout.count() - 1).widget()
+            widget = self.add_kwarg_input(row_layout, name, default, annotation)
+            if widget is not None:
+                widgets[name] = widget
 
             # Add spacing between pairs
             row_layout.addSpacing(20)
@@ -706,7 +737,81 @@ class LivePlotWidget(QWidget):
         group_box.setVisible(bool(widgets))
         return widgets
 
+    def _make_slider_widget(self, default, *metadata):
+        if len(metadata) != 1:
+            logger.warning("Slider metadata must contain exactly one item of type str")
+        if isinstance(metadata[0], str):
+            if metadata[0].startswith("self."):
+                arg = metadata[0][5:]  # remove "self." prefix
+                if not hasattr(self.rt, arg):
+                    logger.error(f"Runtime does not have attribute '{arg}' for slider")
+                    return None
+                values = np.array(self.rt.__getattribute__(arg))
+            else:
+                # can implement other metadata types here
+                logger.error(f"Unsupported slider metadata type: {type(metadata[0])}")
+                return None
 
+        elif isinstance(metadata[0], (list, np.ndarray)):
+            values = np.array(metadata[0])
+        else:
+            logger.warning(f"Unsupported slider metadata type: {type(metadata[0])}")
+            return None
+
+        # Find initial index
+        if isinstance(default, (int, float)):
+            init_idx = np.argmin(np.abs(values - float(default)))
+        else:
+            init_idx = np.argmin(np.abs(values - values.mean()))
+
+
+        slider = QSlider(Qt.Horizontal)
+        slider.setMinimum(0)
+        slider.setMaximum(len(values) - 1)
+        slider.setSingleStep(1)
+        slider.setPageStep(1)
+        slider.setValue(init_idx)
+        slider.setTickPosition(QSlider.TicksBothSides)
+        slider.setTickInterval(1)
+        init_val = values[init_idx]
+        if abs(init_val) < 1e-3 or abs(init_val) >= 1e+4:
+            init_val_str = f"{init_val:.4e}"  # Scientific for very small or large numbers
+        else:
+            init_val_str = f"{init_val:.4f}"  # Standard format otherwise
+        lineedit = QLineEdit(init_val_str)
+        lineedit.setFixedWidth(80)
+
+        def slider_changed(i):
+            val = values[i]
+            if abs(val) < 1e-3 or abs(val) >= 1e+4:
+                val_str = f"{val:.4e}"  # Scientific for very small or large numbers
+            else:
+                val_str = f"{val:.4f}"  # Standard format otherwise
+            
+            lineedit.setText(val_str)
+            self.update_plot(force=True)
+
+        slider.valueChanged.connect(slider_changed)
+
+        def lineedit_changed():
+            try:
+                val = float(lineedit.text())
+                if abs(val) < 1e-3 or abs(val) >= 1e+4:
+                    val_str = f"{val:.4e}"  # Scientific for very small or large numbers
+                else:
+                    val_str = f"{val:.4f}"  # Standard format otherwise
+                lineedit.setText(val_str)
+                idx = np.argmin(np.abs(values - val))
+                slider.setValue(idx)
+
+            except Exception:
+                pass
+            self.update_plot(force=True)
+        lineedit.returnPressed.connect(lineedit_changed)
+        lineedit.editingFinished.connect(lineedit_changed)
+
+        return (lineedit, slider)
+    
     # -------------- update buttons ---------------------------
     def create_update_buttons(self):
         """

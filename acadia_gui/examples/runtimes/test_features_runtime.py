@@ -1,11 +1,13 @@
-from typing import Union, Literal
+from typing import Union, Literal, Annotated
 
 import numpy as np
 
 from acadia import Acadia, DataManager
 from acadia.runtime import annotate_method
 from acadia_qmsmt import QMsmtRuntime, MeasurableResonator, IOConfig
-
+    
+import logging
+logger = logging.getLogger("acadia")
 
 class ResonatorSpectroscopyTestGuiRuntime(QMsmtRuntime):
     """
@@ -24,33 +26,28 @@ class ResonatorSpectroscopyTestGuiRuntime(QMsmtRuntime):
 
     """
 
-    # YAML section names for the two IO channels required by this runtime
     stimulus: IOConfig
     capture: IOConfig
 
-    # Sweep parameters 
     frequencies: Union[list, np.ndarray]
-    iterations: int   # ******** IMPORTANT: This attribute is expected by the GUI for calculating progress bar ETA ********
 
-    # Misc. runtime knobs
-    capture_window_name: str  = None
-    stimulus_waveform_name: str = None
-    electrical_delay: float = 0.0  # s; positive means phase lags with frequency
+    iterations: int
+    run_delay: int
 
-    run_delay: int  # ns of pad‑time between shots
+    stimulus_pulse_name: str = "readout"
+    capture_memory_name: str = "readout_accumulated"
+    capture_window_name: str = None
+
+
     figsize: tuple[int] = None
     yaml_path: str = None
 
-    # Example parameter for dynamically enable/disable a button
-    disable_button5: bool = True
+    disable_button5:bool=False
 
     # =====================================================================
     #                Runtime experiment sequence definition
     # =====================================================================
     def main(self):
-        import logging
-        logger = logging.getLogger("acadia")
-
         stimulus_io = self.io("stimulus")
         capture_io = self.io("capture")
 
@@ -58,34 +55,37 @@ class ResonatorSpectroscopyTestGuiRuntime(QMsmtRuntime):
 
         # Create the record group for saving captured data
         self.data.add_group(f"points", uniform=True)
-
         # Create a sequence for the sequencer to generate the pulse and capture it
         def sequence(a: Acadia):
+
             with a.channel_synchronizer():
                 # Measure the resonator by driving the "readout" waveform on the stimulus IO
                 # and capture into the "readout_accumulated" waveform on the capture IO
-                resonator.measure("readout", "readout_accumulated", self.capture_window_name)
+                resonator.measure(self.stimulus_pulse_name, self.capture_memory_name, self.capture_window_name)
 
-        # misc hardware/software preparations
+        # Compile the sequence
         self.acadia.compile(sequence)
+        # Attach to the hardware
         self.acadia.attach()
+        # Configure channel analog parameters
         self.configure_channels()
+        # Assemble and load the program
         self.acadia.assemble()
         self.acadia.load()
 
         # Load the window memory with the data from the config file
         resonator.load_windows()
-        # Load the stimulus waveform named "readout" with the specified signal
-        stimulus_io.load_waveform("readout", self.stimulus_waveform_name)
+        # Load the stimulus pulse named "readout" with the specified signal
+        stimulus_io.load_pulse(self.stimulus_pulse_name)   # since the readout pulse memory only has one set of sample in it, we don't have to specify the samples here, it will just use that one
 
         for i in range(self.iterations):
-            for frequency in self.frequencies:
+            for j, frequency in enumerate(self.frequencies):
                 resonator.set_frequency(frequency)
 
                 # capture data and put in the corresponding group
                 self.acadia.run(minimum_delay=self.run_delay)
 
-                wf = capture_io.get_waveform_memory("readout_accumulated")
+                wf = capture_io.get_waveform_memory(self.capture_memory_name)
                 self.data[f"points"].write(wf.array)
 
             if self.data.serve() == DataManager.serve_hangup():
@@ -127,6 +127,7 @@ class ResonatorSpectroscopyTestGuiRuntime(QMsmtRuntime):
     # as input fields in the GUI. Two special typehints are recognized:
     # - `bool` or `Bool`: shown as a checkbox
     # - `Literal[...]`: shown as a dropdown menu with options
+    # - `Annotated[type, "key_word", metadata]`: Allows for custom Qt Objects (key_word) to be added to the layout. 
     @annotate_method(is_data_processor=True)
     def process_current_data(self, e_delay: float = 76e-9, auto_edelay: bool = False):
         """
@@ -224,7 +225,6 @@ class ResonatorSpectroscopyTestGuiRuntime(QMsmtRuntime):
         # *** IMPORTANT: the `save_registered_plots` is expecting this function to return the fig and axs to do the saving ***
         return fig, axs
 
-
     # --- Dummy example #2: figure‑based layout --------------------------
     @annotate_method(plot_name="test_2_fig_based")
     def plot_test2(self, fig=None, ax1_label=1, ax2_color: Literal["r", "g", "b"] = "g"):
@@ -246,7 +246,41 @@ class ResonatorSpectroscopyTestGuiRuntime(QMsmtRuntime):
             ax.legend()
 
         return fig, axs
+    
+    # --- Dummy example #3: Using Annotated type to create a slider. Sliders are mostly helpful for 2D sweeps for taking linecuts.
+    #     The slider will show up with a line editor to the left of it indicating the current value, which can also be changed in
+    #     the line editor, and rounded to the closest element in the array. 
 
+    #     Please note that currently sliders only work for float/int arrays. 
+    @annotate_method(plot_name='dummy 2D sweep')
+    def plot_test3(self, fig=None, test_bool:bool=True, freq:Annotated[float, "slider", "self.frequencies"]=None, test_bool2:bool=True,):
+        """
+        With the `Annotated` type hint,  we can define special widget types and additional parameters for widget generation.
+        In this example, 'slider' specifies the widget type, and 'self.frequencies' is parsed by the GUI to retrieve 
+        `rt.frequencies` and create a slider based on those frequency values.
+        """
+        from acadia_qmsmt.plotting import prepare_plot_axes
+
+        fig, axs = prepare_plot_axes(fig)
+        logger.debug(f"plot_test3 received freq: {freq}")
+        logger.debug(f"test_bool: {test_bool}, test_bool2: {test_bool2}")
+
+        # get the closest freq in self.frequencies
+        freq_idx = 0 if freq is None else np.argmin(np.abs(self.frequencies - freq))
+
+        # Simulating a 2d sweep with random data.
+        amplitudes = np.linspace(0.0, 0.9, 101) 
+        # Create 2D noise array: shape (len(frequencies), len(amplitudes))
+        np.random.seed(0) # use a fixed seed so we know the slider is actually updating plots properply
+        noise_array = np.random.normal(loc=0.0, scale=1.0, size=(len(self.frequencies), len(amplitudes)))
+        # scale noise by amplitude
+        scaled_noise = noise_array * amplitudes
+        axs.plot(amplitudes, scaled_noise[freq_idx,:])
+
+        return fig, axs
+
+
+    
     # --- Real plot 1: amplitude & phase vs. DAC --------------------------
     @annotate_method(plot_name="mag_phase_vs_dac", axs_shape=(2, 1))
     def plot_data(self, axs=None, apply_e_delay: bool = True, unwrap_phase: bool = True):
@@ -333,7 +367,6 @@ class ResonatorSpectroscopyTestGuiRuntime(QMsmtRuntime):
 
         fig.tight_layout()
         return fig, axs
-
 
     # ==================================================================================================
     #                             Example button methods
