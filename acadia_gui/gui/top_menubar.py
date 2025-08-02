@@ -88,7 +88,7 @@ class AppMenuBar(QMenuBar):
 
         # === Shortcut Right panel toggle button ===
         self.toggle_right_tabs_button = QToolButton()
-        self.toggle_right_tabs_button.setIcon(QIcon.fromTheme(get_icon("collapse_right_tabs.svg")))
+        self.toggle_right_tabs_button.setIcon(get_icon("collapse_right_tabs.svg"))
         self.toggle_right_tabs_button.setToolTip("Hide right panel")
         self.toggle_right_tabs_button.setCheckable(True)
         self.toggle_right_tabs_button.setChecked(False)

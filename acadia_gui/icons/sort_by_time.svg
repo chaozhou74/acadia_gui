@@ -26,13 +26,13 @@
      inkscape:pagecheckerboard="0"
      inkscape:deskcolor="#d1d1d1"
      showguides="true"
-     inkscape:zoom="0.555625"
-     inkscape:cx="469.74128"
-     inkscape:cy="471.54106"
+     inkscape:zoom="0.78577241"
+     inkscape:cx="425.69578"
+     inkscape:cy="475.32847"
      inkscape:window-width="1844"
      inkscape:window-height="1284"
-     inkscape:window-x="5113"
-     inkscape:window-y="374"
+     inkscape:window-x="4245"
+     inkscape:window-y="326"
      inkscape:window-maximized="0"
      inkscape:current-layer="g1" />
   <g
@@ -40,41 +40,45 @@
      transform="matrix(1.1048575,0,0,1.1048575,-1.8474661,-1.2778151)"
      style="stroke:#000000">
     <path
-       d="M 10.921219,7.1862027 H 2.9212185"
+       d="M 9.3316623,6.3450356 H 2.9212185"
        stroke="#000000"
        stroke-width="1.5"
        stroke-linecap="round"
        id="path1"
-       style="stroke:#000000" />
+       style="stroke:#000000;stroke-width:1.891;stroke-dasharray:none" />
     <path
-       d="M 8.652189,12.186203 H 2.9212185"
+       d="M 6.3227094,12.13437 H 2.9212215"
        stroke="#000000"
        stroke-width="1.5"
        stroke-linecap="round"
        id="path2"
-       style="stroke:#000000" />
+       style="stroke:#000000;stroke-width:1.89101;stroke-dasharray:none" />
     <path
-       d="M 7.0510926,17.186203 H 2.9212185"
+       d="M 4.3377642,17.923704 H 2.9212165"
        stroke="#000000"
        stroke-width="1.5"
        stroke-linecap="round"
        id="path3"
-       style="stroke:#000000" />
-    <circle
-       cx="17.018024"
-       cy="12.186203"
-       r="5"
-       stroke="#000000"
-       stroke-width="1.5"
-       id="circle3"
-       style="stroke:#000000" />
-    <path
-       d="m 17.018024,10.186203 v 1.8462 l 1,1.1538"
-       stroke="#000000"
-       stroke-width="1.5"
-       stroke-linecap="round"
-       stroke-linejoin="round"
-       id="path4"
-       style="stroke:#000000" />
+       style="stroke:#000000;stroke-width:1.891;stroke-dasharray:none" />
+    <g
+       id="g2"
+       transform="matrix(1.1712755,0,0,1.1712755,-3.8304934,-2.1390313)">
+      <circle
+         cx="17.018024"
+         cy="12.186203"
+         stroke="#000000"
+         stroke-width="1.5"
+         id="circle3"
+         style="stroke:#000000"
+         r="5" />
+      <path
+         d="m 17.018024,10.186203 v 1.8462 l 1,1.1538"
+         stroke="#000000"
+         stroke-width="1.5"
+         stroke-linecap="round"
+         stroke-linejoin="round"
+         id="path4"
+         style="stroke:#000000" />
+    </g>
   </g>
 </svg>

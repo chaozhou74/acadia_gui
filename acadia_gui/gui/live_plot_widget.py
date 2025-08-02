@@ -233,8 +233,8 @@ class LivePlotWidget(QWidget):
         self.interval_input.setToolTip("Polling interval (in seconds)")
         self.interval_input.editingFinished.connect(self.update_poll_interval)
 
-        self._pause_icon = QIcon(get_icon("pause_plot.svg"))
-        self._resume_icon = QIcon(get_icon("resume_plot.svg"))
+        self._pause_icon = get_icon("pause_plot.svg")
+        self._resume_icon = get_icon("resume_plot.svg")
         self.pause_button = QToolButton()
         self.pause_button.setIcon(self._pause_icon)
         self.pause_button.setToolTip("Pause plotting")
@@ -243,7 +243,7 @@ class LivePlotWidget(QWidget):
 
         # --- Plot snapshot button -------
         self.snapshot_button = QToolButton()
-        self.snapshot_button.setIcon(QIcon(get_icon("snapshot_plot.svg")))
+        self.snapshot_button.setIcon(get_icon("snapshot_plot.svg"))
         self.snapshot_button.setToolTip("Snapshot plot\n"
                                         "Create a high-DPI figure and scale it down\n"
                                         "for easier fitting in notebooks.\n"

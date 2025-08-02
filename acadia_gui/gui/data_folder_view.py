@@ -3,10 +3,10 @@ import subprocess
 import shutil
 from functools import wraps
 import logging
-from PyQt5.QtWidgets import (QWidget, QFileSystemModel, QTreeView, QVBoxLayout, QSizePolicy,
+from PyQt5.QtWidgets import (QWidget, QFileSystemModel, QTreeView, QVBoxLayout, QSizePolicy, QLineEdit, QLabel,
                              QPushButton, QFileDialog, QMenu, QApplication, QHBoxLayout, QMessageBox)
 from PyQt5.QtCore import Qt, QModelIndex, QDir, QUrl, QSortFilterProxyModel
-from PyQt5.QtGui import QIcon, QDesktopServices
+from PyQt5.QtGui import QIcon, QDesktopServices, QColor
 
 
 from acadia_qmsmt.helpers.path_adapter import detect_platform, to_windows_path
@@ -32,7 +32,7 @@ class DataFolderModel(QFileSystemModel):
 
         if self.trash_icon.isNull():
             # fallback to a local icon
-            self.trash_icon = QIcon(get_icon("trash_bin.svg"))  # <- your own icon
+            self.trash_icon = get_icon("trash_bin.svg")
 
 
     def data(self, index: QModelIndex, role: int = Qt.DisplayRole):
@@ -153,24 +153,59 @@ class FolderTreeWidget(QWidget):
         self.select_button = QPushButton("Select Root Folder")
         self.select_button.clicked.connect(self.select_new_root)
 
-        self.recent_button = QPushButton(QIcon(get_icon("most_recent_folder.svg")), "")
+        self.refresh_button = QPushButton(get_icon("refresh.svg"), "")
+        self.refresh_button.setToolTip("Refresh folders")
+        self.refresh_button.clicked.connect(self.refresh_model)
+
+        self.recent_button = QPushButton(get_icon("most_recent_folder.svg"), "")
         self.recent_button.setToolTip("Select most recent data folder")
         self.recent_button.clicked.connect(self.select_most_recent_folder)
 
-        self.sort_mtime_button = QPushButton(QIcon(get_icon("sort_by_time.svg")), "")
+        self.sort_mtime_button = QPushButton(get_icon("sort_by_time.svg"), "")
         self.sort_mtime_button.setToolTip("Sort folders by modification time")
         self.sort_mtime_button.clicked.connect(self.sort_by_mtime)
         self.current_sort_order = Qt.DescendingOrder
 
-        self.refresh_button = QPushButton(QIcon(get_icon("refresh.svg")), "")
-        self.refresh_button.setToolTip("Refresh folders")
-        self.refresh_button.clicked.connect(self.refresh_model)
+        self.search_button = QPushButton(get_icon("search.svg"), "")
+        self.search_button.setToolTip("Search folders by name")
+        self.search_button.setCheckable(True)
+        self.search_button.clicked.connect(self.toggle_search_box)
+
+        # -----------  search box ------------------
+        self.search_box = QLineEdit()
+        self.search_box.setPlaceholderText("Search folder name...")
+        self.search_box.setVisible(False)
+        self.search_box.returnPressed.connect(self.apply_search_filter)
+        self.search_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+
+        self.match_label = QLabel("0/0")
+        self.match_label.setVisible(False)
+
+        self.prev_match_button = QPushButton("↑")
+        self.prev_match_button.setVisible(False)
+        self.prev_match_button.setToolTip("Previous match")
+        self.prev_match_button.clicked.connect(self.goto_prev_match)
+        self.prev_match_button.setFixedWidth(24)
+
+        self.next_match_button = QPushButton("↓")
+        self.next_match_button.setVisible(False)
+        self.next_match_button.setToolTip("Next match")
+        self.next_match_button.clicked.connect(self.goto_next_match)
+        self.next_match_button.setFixedWidth(24)
+
+        self.search_box_row = QHBoxLayout()
+        self.search_box_row.addWidget(self.search_box)
+        self.search_box_row.addWidget(self.match_label)
+        self.search_box_row.addWidget(self.prev_match_button)
+        self.search_box_row.addWidget(self.next_match_button)
+
 
         button_row_upper = QHBoxLayout()
         button_row_upper.addWidget(self.select_button)
         button_row_upper.addWidget(self.refresh_button)
         button_row_upper.addWidget(self.recent_button)
         button_row_upper.addWidget(self.sort_mtime_button)
+        button_row_upper.addWidget(self.search_button)
 
         # ----- bottom buttons --------------
         self.back_button = QPushButton("←")
@@ -186,6 +221,7 @@ class FolderTreeWidget(QWidget):
 
         layout = QVBoxLayout(self)
         layout.addLayout(button_row_upper)
+        layout.addLayout(self.search_box_row)
         layout.addWidget(self.tree)
         layout.addLayout(button_row_lower)
         layout.setContentsMargins(2, 2, 2, 2)
@@ -199,6 +235,12 @@ class FolderTreeWidget(QWidget):
         self.history = []
         self.history_index = -1  # Points to current item in history
         self.history_max = 10
+
+        # folder search matches
+        self.search_text = None
+        self.search_matches = []
+        self.search_match_index = -1
+        self.last_expanded_path = None
 
     def refresh_model(self):
         # this effectively tells the model to "look again"
@@ -445,3 +487,97 @@ class FolderTreeWidget(QWidget):
             self.tree.setCurrentIndex(proxy_index)
             self.tree.scrollTo(proxy_index)
             self.on_select_callback(path)
+
+    def toggle_search_box(self):
+        visible = self.search_button.isChecked()
+        self.search_box.setVisible(visible)
+        self.prev_match_button.setVisible(visible)
+        self.next_match_button.setVisible(visible)
+        if visible:
+            self.search_box.setFocus()
+        else:
+            self.clear_search_filter()
+
+
+    # ------- folder searching functions ------------------------
+    def apply_search_filter(self):
+        text = self.search_box.text().strip()
+        if not text:
+            return
+
+        # no text change, type enter move to next match
+        if text == self.search_text:
+            if len(self.search_matches) > 1:
+                self.goto_next_match()
+            return
+
+        # text changed, redo search
+        self.search_matches = self.find_folders_matching(text)
+        self.search_text = text
+        count = len(self.search_matches)
+        if count == 0:
+            self.match_label.setText("0/0")
+            self.match_label.setStyleSheet("color: #ff5555; padding-left: 2px; padding-right: 2px;")
+            self.match_label.setVisible(True)
+            return
+
+        self.search_match_index = 0
+        self.match_label.setText(f"1/{count}")
+        self.match_label.setStyleSheet("color: gray; padding-left: 2px; padding-right: 2px;")
+        self.match_label.setVisible(True)
+        self.jump_to_current_match()
+
+    def find_folders_matching(self, pattern: str):
+        matches = []
+        pattern_lower = pattern.lower()
+
+        for dirpath, dirnames, _ in os.walk(self.root_path):
+            if pattern_lower in os.path.basename(dirpath).lower():
+                matches.append(dirpath)
+
+        return matches
+
+    def jump_to_current_match(self):
+        if 0 <= self.search_match_index < len(self.search_matches):
+            path = self.search_matches[self.search_match_index]
+            source_index = self.model.index(path)
+            if not source_index.isValid():
+                return
+            proxy_index = self.proxy_model.mapFromSource(source_index)
+            if not proxy_index.isValid():
+                return
+
+            # Collapse previously expanded using saved path
+            if self.last_expanded_path:
+                last_source = self.model.index(self.last_expanded_path)
+                last_proxy = self.proxy_model.mapFromSource(last_source)
+                if last_proxy.isValid():
+                    self.tree.collapse(last_proxy)
+
+            self.tree.expand(proxy_index)
+            self.tree.scrollTo(proxy_index)
+            self.tree.setCurrentIndex(proxy_index)
+            self.folder_selected(proxy_index)
+
+            self.last_expanded_path = path  # Save the current path
+
+    def goto_next_match(self):
+        if self.search_matches:
+            self.search_match_index = (self.search_match_index + 1) % len(self.search_matches)
+            self.match_label.setText(f"{self.search_match_index + 1}/{len(self.search_matches)}")
+            self.jump_to_current_match()
+
+    def goto_prev_match(self):
+        if self.search_matches:
+            self.search_match_index = (self.search_match_index - 1 + len(self.search_matches)) % len(self.search_matches)
+            self.match_label.setText(f"{self.search_match_index + 1}/{len(self.search_matches)}")
+            self.jump_to_current_match()
+
+    def clear_search_filter(self):
+        self.search_box.clear()
+        self.search_matches = []
+        self.search_text = None
+        self.search_match_index = -1
+        self.match_label.setVisible(False)
+        self.last_expanded_path = None
+
