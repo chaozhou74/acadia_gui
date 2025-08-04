@@ -157,19 +157,26 @@ class FolderTreeWidget(QWidget):
         self.refresh_button.setToolTip("Refresh folders")
         self.refresh_button.clicked.connect(self.refresh_model)
 
-        self.recent_button = QPushButton(get_icon("most_recent_folder.svg"), "")
-        self.recent_button.setToolTip("Select most recent data folder")
-        self.recent_button.clicked.connect(self.select_most_recent_folder)
-
         self.sort_mtime_button = QPushButton(get_icon("sort_by_time.svg"), "")
         self.sort_mtime_button.setToolTip("Sort folders by modification time")
         self.sort_mtime_button.clicked.connect(self.sort_by_mtime)
         self.current_sort_order = Qt.DescendingOrder
 
+        self.recent_button = QPushButton(get_icon("most_recent_folder.svg"), "")
+        self.recent_button.setToolTip("Select most recent data folder")
+        self.recent_button.clicked.connect(self.select_most_recent_folder)
+
         self.search_button = QPushButton(get_icon("search.svg"), "")
         self.search_button.setToolTip("Search folders by name")
         self.search_button.setCheckable(True)
         self.search_button.clicked.connect(self.toggle_search_box)
+
+        button_row_upper = QHBoxLayout()
+        button_row_upper.addWidget(self.select_button)
+        button_row_upper.addWidget(self.refresh_button)
+        button_row_upper.addWidget(self.sort_mtime_button)
+        button_row_upper.addWidget(self.recent_button)
+        button_row_upper.addWidget(self.search_button)
 
         # -----------  search box ------------------
         self.search_box = QLineEdit()
@@ -199,14 +206,6 @@ class FolderTreeWidget(QWidget):
         self.search_box_row.addWidget(self.prev_match_button)
         self.search_box_row.addWidget(self.next_match_button)
 
-
-        button_row_upper = QHBoxLayout()
-        button_row_upper.addWidget(self.select_button)
-        button_row_upper.addWidget(self.refresh_button)
-        button_row_upper.addWidget(self.recent_button)
-        button_row_upper.addWidget(self.sort_mtime_button)
-        button_row_upper.addWidget(self.search_button)
-
         # ----- bottom buttons --------------
         self.back_button = QPushButton("←")
         self.back_button.clicked.connect(self.go_back)
@@ -234,7 +233,7 @@ class FolderTreeWidget(QWidget):
         # folder selection history
         self.history = []
         self.history_index = -1  # Points to current item in history
-        self.history_max = 10
+        self.history_max = 40
 
         # folder search matches
         self.search_text = None
