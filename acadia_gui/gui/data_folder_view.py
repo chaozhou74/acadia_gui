@@ -3,10 +3,12 @@ import subprocess
 import shutil
 from functools import wraps
 import logging
+from threading import Event
+import time
 from PyQt5.QtWidgets import (QWidget, QFileSystemModel, QTreeView, QVBoxLayout, QSizePolicy, QLineEdit, QLabel,
                              QPushButton, QFileDialog, QMenu, QApplication, QHBoxLayout, QMessageBox)
-from PyQt5.QtCore import Qt, QModelIndex, QDir, QUrl, QSortFilterProxyModel
-from PyQt5.QtGui import QIcon, QDesktopServices, QColor
+from PyQt5.QtCore import Qt, QModelIndex, QDir, QUrl, QSortFilterProxyModel, QObject, pyqtSignal, QThread
+from PyQt5.QtGui import QIcon, QDesktopServices, QColor, QBrush
 
 
 from acadia_qmsmt.helpers.path_adapter import detect_platform, to_windows_path
@@ -47,7 +49,6 @@ class DataFolderModel(QFileSystemModel):
 
         if role == Qt.ForegroundRole and index.column() == 0:
             if base_name == TRASH_FOLDER_NAME:
-                from PyQt5.QtGui import QBrush, QColor
                 return QBrush(QColor("#888888"))  # Greyed out color
 
         return super().data(index, role)
@@ -69,8 +70,8 @@ class DataFolderProxyModel(QSortFilterProxyModel):
         if left.parent() != right.parent():
             return super().lessThan(left, right)
 
-        left_name = left.sibling(left.row(), 0).data()
-        right_name = right.sibling(right.row(), 0).data()
+        left_name = (left.sibling(left.row(), 0).data() or "")
+        right_name = (right.sibling(right.row(), 0).data() or "")
 
         # Force Trash on top
         if left_name == TRASH_FOLDER_NAME and right_name != TRASH_FOLDER_NAME:
@@ -96,13 +97,183 @@ class DataFolderProxyModel(QSortFilterProxyModel):
         return super().lessThan(left, right)
 
 
-def update_explorer(func):
+def update_explorer_after_trash(func):
     @wraps(func)
-    def wrapper(self, *args, **kwargs):
-        ret = func(self, *args, **kwargs)
-        self.tree.setRootIndex(self.proxy_model.mapFromSource(self.model.index(self.model.rootPath())))
+    def wrapper(self, path):
+        ret = func(self, path)
+        # self.tree.setRootIndex(self.proxy_model.mapFromSource(self.model.index(self.model.rootPath())))
+        self.proxy_model.invalidate()
         return ret
     return wrapper
+
+
+
+class FolderMonitorWorker(QObject):
+    new_datafolder_found = pyqtSignal(str)
+    finished = pyqtSignal()
+
+    def __init__(self, root_path, poll_interval=0.3, stat_batch=4000):
+        """
+        Polling monitor for new data folders.
+
+        We are not using the Qt built-in monitor because it uses lazy loading,
+        but we do want to monitor nested fooder changes as well.
+
+        How this works:
+        - Keep a list of known directories and their mtimes.
+        - On each tick, stat a round-robin batch.
+        - If a dir’s mtime changed, we fully walk that branch:
+            - If we see a datafolder, emit once and prune its children.
+            - Otherwise, add any new subdirs to tracking.
+
+        :param root_path: root directory to monitor
+        :param poll_interval: interval between scans, in seconds
+        :param stat_batch: how many dirs to stat per tick
+        """
+        super().__init__()
+        self.root_path = os.path.abspath(root_path)
+        self.poll_interval = poll_interval
+        self.stat_batch = stat_batch
+        self._stop_event = Event()
+
+        # Tracking
+        self.dir_state = {}        # path -> {"mtime": float, "last_scan": float}
+        self._dir_keys = []        # round-robin list of dirs to stat each tick
+        self._dir_cursor = 0
+        self.known_datafolders = set()
+
+        self._index_full_branch(self.root_path, emit=False)  # build initial dir state
+
+    def _index_full_branch(self, path, emit=False):
+        """
+        Stat a batch of dirs. If a dir changed, re-walk that branch (emit=True).
+        """
+        for dirpath, dirnames, _ in os.walk(path, topdown=True):
+            # Skip Trash folders entirely
+            if os.path.basename(dirpath) == TRASH_FOLDER_NAME:
+                dirnames[:] = []  # prune children
+                continue
+
+            # If we already know it's a datafolder, prune subtree
+            if dirpath in self.known_datafolders:
+                dirnames[:] = []
+                continue
+
+            if is_datafolder(dirpath):
+                if dirpath not in self.known_datafolders:
+                    self.known_datafolders.add(dirpath)
+                    if emit:
+                        self.new_datafolder_found.emit(dirpath)
+                dirnames[:] = []  # prune children of a datafolder
+                continue
+
+            # Track this directory
+            try:
+                st = os.stat(dirpath, follow_symlinks=False)
+            except (FileNotFoundError, PermissionError):
+                dirnames[:] = []
+                continue
+
+            if dirpath not in self.dir_state:
+                self.dir_state[dirpath] = {"mtime": st.st_mtime, "last_scan": 0.0}
+                self._dir_keys.append(dirpath)
+            else:
+                # keep mtime fresh if we walked due to a parent change
+                self.dir_state[dirpath]["mtime"] = st.st_mtime
+
+    def _scan_changed_dirs(self):
+        """
+        Round-robin stat a batch. For any dir whose mtime changed,
+        walk the FULL branch rooted at that dir (emit=True).
+        """
+        if not self._dir_keys:
+            return
+
+        n = len(self._dir_keys)
+        end = self._dir_cursor + min(self.stat_batch, n)
+        i = self._dir_cursor
+
+        while i < end and not self._stop_event.is_set():
+            d = self._dir_keys[i % n]
+            st = self.dir_state.get(d)
+            if st is None:
+                i += 1
+                continue
+
+            try:
+                s = os.stat(d, follow_symlinks=False)
+                if st["mtime"] != s.st_mtime:
+                    # parent changed -> fully (re)index the branch and emit any new datafolders
+                    st["mtime"] = s.st_mtime
+                    self._index_full_branch(d, emit=True)
+                st["last_scan"] = time.time()
+            except (FileNotFoundError, PermissionError):
+                # dropped; remove from state (lazy compact of _dir_keys later)
+                self.dir_state.pop(d, None)
+
+            i += 1
+
+        self._dir_cursor = (i % max(1, n))
+
+        # Light compaction of _dir_keys if many paths were removed
+        if len(self._dir_keys) > max(1, int(len(self.dir_state) * 1.2)):
+            self._dir_keys = [k for k in self._dir_keys if k in self.dir_state]
+            self._dir_cursor = (self._dir_cursor % len(self._dir_keys)) if self._dir_keys else 0
+
+    def run(self):
+        try:
+            while not self._stop_event.is_set():
+                self._scan_changed_dirs()
+                time.sleep(self.poll_interval)
+        finally:
+            self.finished.emit()
+
+    def stop(self):
+        self._stop_event.set()
+
+
+
+# class FolderMonitorWorker(QObject):
+#     new_datafolder_found = pyqtSignal(str)
+#     finished = pyqtSignal()
+#
+#     def __init__(self, root_path, poll_interval=0.5):
+#         super().__init__()
+#         self.root_path = os.path.abspath(root_path)
+#         self.poll_interval = poll_interval
+#         self._stop_event = Event()
+#         self.known_datafolders = set()
+#         self._inspect_current_folders()
+#
+#     def _inspect_current_folders(self):
+#         logger.info("Inspecting existing data folders...")
+#         for dirpath, dirnames, _ in os.walk(self.root_path, topdown=True):
+#             if is_datafolder(dirpath):
+#                 self.known_datafolders.add(dirpath)
+#                 # prune: no need to visit children of a datafolder
+#                 dirnames[:] = []
+#         logger.info("Done inspecting existing data folders.")
+#
+#     def stop(self):
+#         self._stop_event.set()
+#
+#     def run(self):
+#         try:
+#             while not self._stop_event.is_set():
+#                 for dirpath, dirnames, _ in os.walk(self.root_path, topdown=True):
+#                     # prune entire subtree if we already know it's a datafolder
+#                     if dirpath in self.known_datafolders:
+#                         dirnames[:] = []
+#                         continue
+#
+#                     if is_datafolder(dirpath):
+#                         self.known_datafolders.add(dirpath)
+#                         self.new_datafolder_found.emit(dirpath)
+#                         dirnames[:] = []  # prune newly found subtree
+#                 time.sleep(self.poll_interval)
+#         finally:
+#             self.finished.emit()
+#
 
 
 class CustomTreeView(QTreeView):
@@ -163,8 +334,13 @@ class FolderTreeWidget(QWidget):
         self.current_sort_order = Qt.DescendingOrder
 
         self.recent_button = QPushButton(get_icon("most_recent_folder.svg"), "")
-        self.recent_button.setToolTip("Select most recent data folder")
+        self.recent_button.setToolTip("Select most recent data folder.\nRight‑click to toggle auto‑jump.")
         self.recent_button.clicked.connect(self.select_most_recent_folder)
+
+        # lock to always look at the most recent folder
+        self.recent_lock_enabled = False
+        self.recent_button.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.recent_button.customContextMenuRequested.connect(self.toggle_recent_lock)
 
         self.search_button = QPushButton(get_icon("search.svg"), "")
         self.search_button.setToolTip("Search folders by name")
@@ -228,7 +404,6 @@ class FolderTreeWidget(QWidget):
         self.setLayout(layout)
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self.open_context_menu)
-        # self.model.directoryLoaded.connect(lambda _: self.tree.sortByColumn(3, Qt.DescendingOrder))
 
         # folder selection history
         self.history = []
@@ -241,15 +416,62 @@ class FolderTreeWidget(QWidget):
         self.search_match_index = -1
         self.last_expanded_path = None
 
+        # most recent folder monitoring
+        self.monitor_worker = None
+        self.monitor_thread = None
+        self.destroyed.connect(self.stop_monitoring)
+
+
+    # ---------- path/index helpers ----------
+    def path_to_source_index(self, path: str) -> QModelIndex:
+        """Return QFileSystemModel index for path (invalid if path missing)."""
+        if not path:
+            return QModelIndex()
+        return self.model.index(os.path.abspath(path))
+
+    def path_to_proxy_index(self, path: str) -> QModelIndex:
+        """Map path -> proxy index (invalid if unmappable)."""
+        src = self.path_to_source_index(path)
+        if not src.isValid():
+            return QModelIndex()
+        return self.proxy_model.mapFromSource(src)
+
+
+    def source_path_from_proxy_index(self, proxy_index: QModelIndex) -> str:
+        """Inverse of path_to_proxy_index (proxy -> source -> path)."""
+        if not proxy_index.isValid():
+            return ""
+        source_index = self.proxy_model.mapToSource(proxy_index)
+        return self.model.filePath(source_index)
+
+    def focus_path(self, path: str, ensure_visible: bool = True,
+                   update_history: bool = True, trigger_callback: bool = True) -> bool:
+        """
+        Centralized 'go to this folder' operation.
+        Returns True if selection happened.
+        """
+        proxy = self.path_to_proxy_index(path)
+        if not proxy.isValid():
+            return False
+
+        self.tree.setCurrentIndex(proxy)
+        if ensure_visible:
+            self.tree.scrollTo(proxy)
+
+        if update_history and is_datafolder(path):
+            self._update_history(path)
+
+        if trigger_callback:
+            self.on_select_callback(path)
+        return True
+
+
     def refresh_model(self):
         # this effectively tells the model to "look again"
         self.model.setRootPath("")  # reset
         self.model.setRootPath(self.root_path)
         self.tree.setRootIndex(self.proxy_model.mapFromSource(self.model.index(self.root_path)))
 
-    def source_path_from_proxy_index(self, proxy_index: QModelIndex) -> str:
-        source_index = self.proxy_model.mapToSource(proxy_index)
-        return self.model.filePath(source_index)
 
     def folder_selected(self, index: QModelIndex):
         path = self.source_path_from_proxy_index(index)
@@ -265,20 +487,27 @@ class FolderTreeWidget(QWidget):
 
     def set_root_path(self, root_path):
         if os.path.isdir(root_path):
+            # If monitoring, stop first (keeps things clean)
+            was_locked = self.recent_lock_enabled and (self.monitor_worker is not None)
+            if was_locked:
+                self.stop_monitoring()
+
             self.model.setRootPath(root_path)
             self.tree.setRootIndex(self.proxy_model.mapFromSource(self.model.index(root_path)))
             self.root_path = root_path
             # clear navigation history
             self.history = []
-            self.history_index = -1  # Points to current item in history
+            self.history_index = -1
+
+            if was_locked:  # restore monitoring on the new root
+                self.start_monitoring()
 
     def collapse_peer_folders(self, path):
         """
         Collapse all sibling folders of the selected top-level folder.
         Keeps the clicked folder expanded and visible, but collapses everything else at the same level and below.
         """
-        source_index = self.model.index(path)
-        proxy_index = self.proxy_model.mapFromSource(source_index)
+        proxy_index = self.path_to_proxy_index(path)
 
         if not proxy_index.isValid():
             return
@@ -368,18 +597,41 @@ class FolderTreeWidget(QWidget):
         else:
             QDesktopServices.openUrl(QUrl.fromLocalFile(path))
 
-    @update_explorer
+    @update_explorer_after_trash
     def handle_trash(self, path):
         parent_dir = os.path.dirname(path)
         trash_dir = os.path.join(parent_dir, TRASH_FOLDER_NAME)
         os.makedirs(trash_dir, exist_ok=True)
         try:
-            shutil.move(path, trash_dir)
+            target = _unique_trash_path(trash_dir, os.path.basename(path))
+            shutil.move(path, target)
             logger.info(f"Moved {path} to {trash_dir}")
         except Exception as e:
             logger.error(f"Failed to move {path} to trash: {e}", exc_info=True)
 
-    @update_explorer
+        # --- auto-select next index in the same parent ---
+        trashed_proxy = self.path_to_proxy_index(path)
+        parent_proxy = trashed_proxy.parent()
+
+        # Try next sibling row
+        next_row = trashed_proxy.row() + 1
+        if next_row >= self.proxy_model.rowCount(parent_proxy):
+            # No next sibling → try previous sibling
+            next_row = trashed_proxy.row() - 1
+
+        if 0 <= next_row < self.proxy_model.rowCount(parent_proxy):
+            next_proxy = self.proxy_model.index(next_row, 0, parent_proxy)
+        else:
+            # No siblings → select parent
+            next_proxy = parent_proxy
+
+        if next_proxy.isValid():
+            self.tree.setCurrentIndex(next_proxy)
+            self.tree.scrollTo(next_proxy)
+            self._update_history(self.source_path_from_proxy_index(next_proxy))
+            self.on_select_callback(self.source_path_from_proxy_index(next_proxy))
+
+    @update_explorer_after_trash
     def handle_restore(self, path):
         parent_dir = os.path.dirname(path)  # trash/
         original_dir = os.path.dirname(parent_dir)  # where it came from
@@ -394,10 +646,12 @@ class FolderTreeWidget(QWidget):
         try:
             shutil.move(path, restore_path)
             logger.info(f"Restored {path} to {restore_path}")
+            self.focus_path(restore_path)
         except Exception as e:
             logger.error(f"Failed to restore {path}: {e}", exc_info=True)
 
-    @update_explorer
+
+    @update_explorer_after_trash
     def handle_empty_trash(self, path):
         if not os.path.isdir(path):
             logger.warning(f"Path {path} is not a directory")
@@ -423,27 +677,45 @@ class FolderTreeWidget(QWidget):
                 logger.error(f"Failed to delete trash folder {path}: {e}", exc_info=True)
 
     def select_most_recent_folder(self):
-        # todo: the sorting can be optimized, kind of slow currently
         root_path = self.model.rootPath()
         most_recent_path = None
-        latest_mtime = None
+        latest_mtime = -1.0
 
-        for dirpath, dirnames, filenames in os.walk(root_path):
-            if is_datafolder(dirpath):
-                run_path = os.path.join(dirpath, DATAFOLDER_INDICATOR_FILE)
-                mtime = os.path.getmtime(run_path)
-                if most_recent_path is None or mtime > latest_mtime:
-                    most_recent_path = dirpath
-                    latest_mtime = mtime
+        stack = [root_path]
+        while stack:
+            current_dir = stack.pop()
+            try:
+                with os.scandir(current_dir) as it:
+                    for entry in it:
+                        if not entry.is_dir(follow_symlinks=False):
+                            continue
+
+                        dirpath = entry.path
+                        # Skip Trash folders entirely
+                        if os.path.basename(dirpath) == TRASH_FOLDER_NAME:
+                            continue
+
+                        # Check if this is a data folder
+                        run_py = os.path.join(dirpath, DATAFOLDER_INDICATOR_FILE)
+                        if os.path.isfile(run_py):
+                            try:
+                                mtime = os.stat(run_py, follow_symlinks=False).st_mtime
+                            except (FileNotFoundError, PermissionError):
+                                continue
+                            if mtime > latest_mtime:
+                                latest_mtime = mtime
+                                most_recent_path = dirpath
+                            # prune children of a datafolder
+                            continue
+
+                        # Not a datafolder → add to stack for further scanning
+                        stack.append(dirpath)
+            except (FileNotFoundError, PermissionError):
+                continue
 
         if most_recent_path:
-            source_index = self.model.index(most_recent_path)
-            proxy_index = self.proxy_model.mapFromSource(source_index)
-            if proxy_index.isValid():
-                self.tree.setCurrentIndex(proxy_index)
-                self.tree.scrollTo(proxy_index)
-                self._update_history(most_recent_path)
-                self.on_select_callback(most_recent_path)
+            self.focus_path(most_recent_path)
+
 
     def sort_by_mtime(self):
         self.tree.sortByColumn(3, self.current_sort_order)
@@ -480,12 +752,7 @@ class FolderTreeWidget(QWidget):
 
     def _navigate_to_history_index(self):
         path = self.history[self.history_index]
-        source_index = self.model.index(path)
-        proxy_index = self.proxy_model.mapFromSource(source_index)
-        if proxy_index.isValid():
-            self.tree.setCurrentIndex(proxy_index)
-            self.tree.scrollTo(proxy_index)
-            self.on_select_callback(path)
+        self.focus_path(path, ensure_visible=True, update_history=False)
 
     def toggle_search_box(self):
         visible = self.search_button.isChecked()
@@ -580,3 +847,81 @@ class FolderTreeWidget(QWidget):
         self.match_label.setVisible(False)
         self.last_expanded_path = None
 
+    # -------------- monitor and lock to the most recent folder ----------
+    def toggle_recent_lock(self, pos):
+        """
+        lock to always look at the most recent data folder
+        """
+        menu = QMenu()
+        action = menu.addAction("Auto-jump to newest" if not self.recent_lock_enabled else "Unlock auto-jump")
+        result = menu.exec_(self.recent_button.mapToGlobal(pos))
+        if result == action:
+            self.recent_lock_enabled = not self.recent_lock_enabled
+            icon_name = "most_recent_folder_lock.svg" if self.recent_lock_enabled else "most_recent_folder.svg"
+            self.recent_button.setIcon(get_icon(icon_name))
+
+            if self.recent_lock_enabled:
+                self.start_monitoring()
+            else:
+                self.stop_monitoring()
+
+    def start_monitoring(self):
+        # don’t start twice
+        if self.monitor_thread is not None and self.monitor_thread.isRunning():
+            return
+
+        # If a stale thread exists but not running, clear it
+        if self.monitor_thread is not None and not self.monitor_thread.isRunning():
+            self.monitor_thread.deleteLater()
+            self.monitor_thread = None
+
+        self.monitor_thread = QThread(self)
+        self.monitor_worker = FolderMonitorWorker(self.root_path)
+        self.monitor_worker.moveToThread(self.monitor_thread)
+
+        # Wire up lifecycle
+        self.monitor_thread.started.connect(self.monitor_worker.run)
+        self.monitor_worker.new_datafolder_found.connect(self.handle_new_datafolder)
+        self.monitor_worker.finished.connect(self.monitor_thread.quit)
+        self.monitor_worker.finished.connect(self.monitor_worker.deleteLater)
+        self.monitor_thread.finished.connect(self.monitor_thread.deleteLater)
+
+        # Clear refs when fully done
+        def _clear_refs():
+            self.monitor_worker = None
+            self.monitor_thread = None
+        self.monitor_thread.finished.connect(_clear_refs)
+
+        self.monitor_thread.start()
+
+    def stop_monitoring(self):
+        # Idempotent stop — safe to call multiple times
+        if self.monitor_worker is not None:
+            self.monitor_worker.stop()
+        if self.monitor_thread is not None:
+            # If run() returns quickly, quit() is enough; wait() ensures full teardown
+            self.monitor_thread.quit()
+            self.monitor_thread.wait()
+        self.monitor_worker = None
+        self.monitor_thread = None
+
+    def handle_new_datafolder(self, new_path: str):
+        # Jump to most recent if toggle is ON
+        if self.recent_lock_enabled:
+            self.focus_path(new_path)
+
+    def closeEvent(self, e):
+        self.stop_monitoring()
+        super().closeEvent(e)
+
+
+def _unique_trash_path(trash_dir, base_name):
+    candidate = os.path.join(trash_dir, base_name)
+    if not os.path.exists(candidate):
+        return candidate
+    i = 1
+    while True:
+        cand = os.path.join(trash_dir, f"{base_name} ({i})")
+        if not os.path.exists(cand):
+            return cand
+        i += 1

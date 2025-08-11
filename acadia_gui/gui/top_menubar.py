@@ -20,10 +20,10 @@ logger = logging.getLogger(__name__)
 
 try:
     from pympler import asizeof
-except ImportError:
+except Exception as e:
+    logger.warning(f"Failed to load 'pympler' module: {e}; python object memory usage is not shown. ", exc_info=True)
     asizeof = None
-    logger.warning("'pympler' module not found; python object memory usage is not shown. "
-                   "to enable, do: `pip install pympler`")
+
 
 def count_qobjects():
     app = QApplication.instance()
