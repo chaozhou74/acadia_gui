@@ -680,6 +680,7 @@ class FolderTreeWidget(QWidget):
         root_path = self.model.rootPath()
         most_recent_path = None
         latest_mtime = -1.0
+        logger.debug(f"Scanning for most recent data folder under {root_path}...")
 
         stack = [root_path]
         while stack:

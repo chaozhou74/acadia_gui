@@ -6,7 +6,7 @@ import logging
 from PyQt5.QtWidgets import QApplication
 
 from acadia_gui.gui import DataBrowser
-from acadia_gui.utils import set_qt_scaling
+from acadia_gui.utils import set_qt_scaling, check_wsl_interop
 
 logger = logging.getLogger("__name__")
 def acadia_gui(root_path:str = None, instrument_station=None, dark_mode=False):
@@ -16,6 +16,8 @@ def acadia_gui(root_path:str = None, instrument_station=None, dark_mode=False):
     :param instrument_station: A `instrumentserver.ClientStation` instance used to restore instrument
             states from previously saved configurations in the data browser GUI.
     """
+    # Check if running in WSL and warn about missing interop setting
+    check_wsl_interop()
 
     if root_path is None:
         root_path = str(Path.home())
