@@ -5,6 +5,8 @@ from PyQt5.QtWidgets import QTabWidget, QTextBrowser
 from PyQt5.QtGui import QTextCharFormat, QColor, QFont
 from PyQt5.QtCore import QTimer
 
+# todo: move this to a worker thread
+
 QUOTED_PATTERN = re.compile(r"'[^']*'")
 FLOAT_PATTERN = re.compile(r"""(?x)(?<!\w)[-+]?(?:\d+\.\d*|\.\d+|\d+)(?:[eE][-+]?\d+)?(?![\w.])""")
 TIMESTAMP_PATTERN = re.compile(r"\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}\]")
@@ -33,14 +35,14 @@ class LogViewer(QTabWidget):
         self.folder_path = folder_path
         self.file_mtimes = {}
 
-        log_files = find_log_files(folder_path)
+        self.log_files = find_log_files(folder_path)
 
-        if not log_files:
+        if not self.log_files:
             browser = QTextBrowser()
             browser.setPlainText("No log files found.")
             self.addTab(browser, "Logs")
         else:
-            for fname in log_files:
+            for fname in self.log_files:
                 self._add_log_tab(fname)
 
         self.timer.start(1000)
@@ -155,6 +157,14 @@ class LogViewer(QTabWidget):
     def check_for_updates(self):
         if not self.folder_path:
             return
+
+        # check if there is any new log files and add them
+        logs = set(find_log_files(self.folder_path))
+        for log in logs - set(self.log_files):
+                self.log_files.append(log)
+                self._add_log_tab(log)
+
+        # update the content of the existing ones
         for i in range(self.count()):
             fname = self.tabText(i)
             full_path = os.path.join(self.folder_path, fname)

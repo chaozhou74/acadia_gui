@@ -253,7 +253,7 @@ class ResonatorSpectroscopyTestGuiRuntime(QMsmtRuntime):
     #     the line editor, and rounded to the closest element in the array. 
 
     #     Please note that currently sliders only work for float/int arrays. 
-    @annotate_method(plot_name='dummy 2D sweep')
+    @annotate_method(plot_name='test_3_dummy 2D sweep')
     def plot_test3(self, fig=None, test_bool:bool=True, freq:Annotated[float, "slider", "self.frequencies"]=None, test_bool2:bool=True,):
         """
         With the `Annotated` type hint,  we can define special widget types and additional parameters for widget generation.

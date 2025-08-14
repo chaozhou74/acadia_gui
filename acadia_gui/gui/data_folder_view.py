@@ -7,7 +7,7 @@ from threading import Event
 import time
 from PyQt5.QtWidgets import (QWidget, QFileSystemModel, QTreeView, QVBoxLayout, QSizePolicy, QLineEdit, QLabel,
                              QPushButton, QFileDialog, QMenu, QApplication, QHBoxLayout, QMessageBox)
-from PyQt5.QtCore import Qt, QModelIndex, QDir, QUrl, QSortFilterProxyModel, QObject, pyqtSignal, QThread
+from PyQt5.QtCore import Qt, QModelIndex, QDir, QUrl, QSortFilterProxyModel, QObject, pyqtSignal, QThread, QTimer
 from PyQt5.QtGui import QIcon, QDesktopServices, QColor, QBrush
 
 
@@ -148,6 +148,7 @@ class FolderMonitorWorker(QObject):
         """
         Stat a batch of dirs. If a dir changed, re-walk that branch (emit=True).
         """
+        logger.debug(f"Inspecting existing data folders under {path}...")
         for dirpath, dirnames, _ in os.walk(path, topdown=True):
             # Skip Trash folders entirely
             if os.path.basename(dirpath) == TRASH_FOLDER_NAME:
@@ -180,6 +181,7 @@ class FolderMonitorWorker(QObject):
             else:
                 # keep mtime fresh if we walked due to a parent change
                 self.dir_state[dirpath]["mtime"] = st.st_mtime
+        logger.debug(f"Done inspecting data folders under {path}.")
 
     def _scan_changed_dirs(self):
         """
@@ -321,7 +323,7 @@ class FolderTreeWidget(QWidget):
         self.tree.hideColumn(3)  # Time Modified
 
         # ----- top buttons --------------
-        self.select_button = QPushButton("Select Root Folder")
+        self.select_button = QPushButton("Select Root")
         self.select_button.clicked.connect(self.select_new_root)
 
         self.refresh_button = QPushButton(get_icon("refresh.svg"), "")
@@ -487,20 +489,24 @@ class FolderTreeWidget(QWidget):
 
     def set_root_path(self, root_path):
         if os.path.isdir(root_path):
-            # If monitoring, stop first (keeps things clean)
-            was_locked = self.recent_lock_enabled and (self.monitor_worker is not None)
-            if was_locked:
-                self.stop_monitoring()
+            # If monitoring, stop first
+            was_enabled = self.recent_lock_enabled
+
+            # stop current monitoring but DO NOT flip the flag
+            self._pause_monitoring()
 
             self.model.setRootPath(root_path)
             self.tree.setRootIndex(self.proxy_model.mapFromSource(self.model.index(root_path)))
             self.root_path = root_path
+
             # clear navigation history
             self.history = []
             self.history_index = -1
 
-            if was_locked:  # restore monitoring on the new root
-                self.start_monitoring()
+            # resume monitoring if user had it enabled
+            if was_enabled:
+                self.start_monitoring()  # will respect recent_lock_enabled
+            self._set_recent_lock_ui()
 
     def collapse_peer_folders(self, path):
         """
@@ -849,29 +855,34 @@ class FolderTreeWidget(QWidget):
         self.last_expanded_path = None
 
     # -------------- monitor and lock to the most recent folder ----------
+    def _set_recent_lock_ui(self):
+        # locked icon when enabled, unlocked when disabled
+        self.recent_button.setIcon(get_icon(
+            "most_recent_folder_lock.svg" if self.recent_lock_enabled else "most_recent_folder.svg"
+        ))
+
     def toggle_recent_lock(self, pos):
         """
         lock to always look at the most recent data folder
         """
         menu = QMenu()
-        action = menu.addAction("Auto-jump to newest" if not self.recent_lock_enabled else "Unlock auto-jump")
+        action_text = "Unlock auto-jump" if self.recent_lock_enabled else "Auto-jump to newest"
+        action = menu.addAction(action_text)
         result = menu.exec_(self.recent_button.mapToGlobal(pos))
         if result == action:
-            self.recent_lock_enabled = not self.recent_lock_enabled
-            icon_name = "most_recent_folder_lock.svg" if self.recent_lock_enabled else "most_recent_folder.svg"
-            self.recent_button.setIcon(get_icon(icon_name))
-
             if self.recent_lock_enabled:
-                self.start_monitoring()
+                self.stop_monitoring()  # flips flag OFF
             else:
-                self.stop_monitoring()
+                self.start_monitoring()  # flips flag ON
 
     def start_monitoring(self):
+        self.recent_lock_enabled = True
         # don’t start twice
         if self.monitor_thread is not None and self.monitor_thread.isRunning():
+            self._set_recent_lock_ui()
             return
 
-        # If a stale thread exists but not running, clear it
+        # clear stale thread if present
         if self.monitor_thread is not None and not self.monitor_thread.isRunning():
             self.monitor_thread.deleteLater()
             self.monitor_thread = None
@@ -880,36 +891,46 @@ class FolderTreeWidget(QWidget):
         self.monitor_worker = FolderMonitorWorker(self.root_path)
         self.monitor_worker.moveToThread(self.monitor_thread)
 
-        # Wire up lifecycle
         self.monitor_thread.started.connect(self.monitor_worker.run)
         self.monitor_worker.new_datafolder_found.connect(self.handle_new_datafolder)
         self.monitor_worker.finished.connect(self.monitor_thread.quit)
         self.monitor_worker.finished.connect(self.monitor_worker.deleteLater)
         self.monitor_thread.finished.connect(self.monitor_thread.deleteLater)
 
-        # Clear refs when fully done
         def _clear_refs():
             self.monitor_worker = None
             self.monitor_thread = None
+            # if user still wants it enabled but thread died unexpectedly,
+            # UI stays "enabled" and a future resume will recreate the thread.
+            self._set_recent_lock_ui()
+
         self.monitor_thread.finished.connect(_clear_refs)
 
         self.monitor_thread.start()
+        self._set_recent_lock_ui()
 
-    def stop_monitoring(self):
-        # Idempotent stop — safe to call multiple times
+    def _pause_monitoring(self):
+        """Internal: stop threads without changing recent_lock_enabled."""
         if self.monitor_worker is not None:
             self.monitor_worker.stop()
         if self.monitor_thread is not None:
-            # If run() returns quickly, quit() is enough; wait() ensures full teardown
             self.monitor_thread.quit()
             self.monitor_thread.wait()
         self.monitor_worker = None
         self.monitor_thread = None
 
+    def stop_monitoring(self):
+        """User intent: fully disable auto-jump."""
+        self.recent_lock_enabled = False
+        self._pause_monitoring()
+        self._set_recent_lock_ui()
+
     def handle_new_datafolder(self, new_path: str):
         # Jump to most recent if toggle is ON
         if self.recent_lock_enabled:
-            self.focus_path(new_path)
+            # schedule after 1 second (1000 ms) to let files populate
+            # todo: maybe instead triggering with a single when first plot update happens?
+            QTimer.singleShot(1000, lambda: self.focus_path(new_path))
 
     def closeEvent(self, e):
         self.stop_monitoring()
