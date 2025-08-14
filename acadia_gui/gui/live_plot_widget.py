@@ -1,12 +1,13 @@
 import os
 import time
 import inspect
-from functools import partial
+from functools import partial, wraps
 from typing import Iterable, Union, Callable, Literal, Annotated, get_type_hints, get_args, get_origin
 from collections import defaultdict
 import subprocess
 import logging
 from pathlib import Path
+import ast
 
 import numpy as np
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg, NavigationToolbar2QT
@@ -49,7 +50,7 @@ def parse_inputs(input_dict):
             kwargs[k] = w.currentText()
         elif isinstance(w, QLineEdit):
             try:
-                val = eval(w.text())
+                val = _safe_eval(w.text())
                 kwargs[k] = val
             except Exception:
                 kwargs[k] = w.text()
@@ -160,6 +161,37 @@ def make_kwarg_box(title):
     layout = QVBoxLayout()
     box.setLayout(layout)
     return box, layout
+
+def _safe_eval(text):
+    try:
+        return ast.literal_eval(text)
+    except Exception:
+        return text
+
+def coalesce_calls(flag_name="_updating", pending_name="_pending_update", reschedule_ms=0):
+    """
+    Prevents reentrancy and coalesces missed calls into one extra run.
+    - If called while busy, sets `pending_name` and returns immediately.
+    - On exit, if pending, schedules one more call after `reschedule_ms`.
+    """
+    def deco(func):
+        @wraps(func)
+        def wrapper(self, *args, **kwargs):
+            if getattr(self, flag_name, False):
+                setattr(self, pending_name, True)
+                return
+            setattr(self, flag_name, True)
+            try:
+                return func(self, *args, **kwargs)
+            finally:
+                setattr(self, flag_name, False)
+                if getattr(self, pending_name, False):
+                    setattr(self, pending_name, False)
+                    # schedule one more pass, coalesced
+                    QtCore.QTimer.singleShot(reschedule_ms, lambda: func(self, *args, **kwargs))
+        return wrapper
+    return deco
+
 
 class LivePlotWidget(QWidget):
     def __init__(self, poll_interval_sec=2, update_indicator_file=UPDATE_INDICATOR_FILE,
@@ -468,7 +500,7 @@ class LivePlotWidget(QWidget):
         else: # if we don't have data yet, redo data processing, then plot
             self.update_plot(force=True)
 
-
+    @coalesce_calls()
     def update_plot(self, force=False, reprocess_data=True):
         """
         Update the current selected plot.
@@ -701,7 +733,7 @@ class LivePlotWidget(QWidget):
 
             def handle_return():
                 try: # generic inputs will try to be evaluated
-                    val = eval(widget.text())
+                    val = _safe_eval(widget.text())
                     widget.setText(str(val))
                 except Exception:
                     pass
@@ -1227,7 +1259,7 @@ class LivePlotWidget(QWidget):
         rcdefaults()
         if "dark" in theme_name.lower():
             try:
-                import mplcyberpunk1
+                import mplcyberpunk
                 mpl_style.use("cyberpunk")
             except ModuleNotFoundError:
                 mpl_style.use("dark_background")
