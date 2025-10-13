@@ -13,5 +13,6 @@ setup(
         'pyqt5',
         'psutil', # for overall memory usage monitoring
         'pympler' # python object memory usage tracking
+        'ruamel.yaml'
     ]
 )

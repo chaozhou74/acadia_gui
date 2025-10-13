@@ -112,13 +112,19 @@ To generate live plotting, the Runtime class must define:
 
    Then, install the required XCB-related libraries in the WSL terminal.
     ```bash
-	sudo apt-get install libx11-xcb1 libxcb1 libxcb-glx0 \
-	libxcb-keysyms1 libxcb-image0 libxcb-shm0 libxcb-icccm4 \
-	libxcb-sync1 libxcb-xfixes0 libxcb-shape0 libxcb-randr0 \
-	libxcb-render-util0 libxcb-render0 libxcb-xinerama0 libxcb-xkb1 libxkbcommon-x11-0   
-	```
+    sudo apt install libxcb-xinerama0
+    ```
+    
    After installation, re-enter your virtual environment and try running the GUI again.
 
+   If this still doesn't work, try installing the full xcb related packages
+   ```bash
+    sudo apt-get install libx11-xcb1 libxcb1 libxcb-glx0 \
+    libxcb-keysyms1 libxcb-image0 libxcb-shm0 libxcb-icccm4 \
+    libxcb-sync1 libxcb-xfixes0 libxcb-shape0 libxcb-randr0 \
+    libxcb-render-util0 libxcb-render0 libxcb-xinerama0 libxcb-xkb1 \ libxkbcommon-x11-0   
+   ```
+  
 ---
 
 ## Todos:
