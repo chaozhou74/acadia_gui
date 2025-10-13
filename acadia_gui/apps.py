@@ -7,6 +7,7 @@ from PyQt5.QtWidgets import QApplication
 
 from acadia_gui.gui import DataBrowser
 from acadia_gui.utils import set_qt_scaling, check_wsl_interop
+from acadia_gui.icons import get_icon
 
 logger = logging.getLogger("__name__")
 def acadia_gui(root_path:str = None, instrument_station=None, dark_mode=False):
@@ -26,6 +27,8 @@ def acadia_gui(root_path:str = None, instrument_station=None, dark_mode=False):
     set_qt_scaling()
     app = QApplication(sys.argv)
     window = DataBrowser(root_path, instrument_station, theme="dark" if dark_mode else None)
+    window.setWindowTitle("Acadia Data Browser")
+    window.setWindowIcon(get_icon("app_icon.svg"))  # your icon file here
     window.show()
     sys.exit(app.exec_())
 
