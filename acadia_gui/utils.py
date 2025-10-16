@@ -70,8 +70,8 @@ def set_qt_scaling(scale=None):
         os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "1"
         os.environ["QT_SCALE_FACTOR_ROUNDING_POLICY"] = "PassThrough"
 
-        QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps)
-        QApplication.setAttribute(Qt.AA_EnableHighDpiScaling) # Just to be safe
+    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+    QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
 
 
 def get_qt_scaling():
