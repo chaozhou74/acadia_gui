@@ -8,7 +8,7 @@ from PyQt5.QtWidgets import (
     QApplication, QWidget, QMainWindow, QVBoxLayout, QSplitter, QSizePolicy,
     QTabWidget
 )
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import Qt, QTimer, QPoint, QSize, QRect, QSettings
 
 from acadia_gui.gui import (LogViewer, InstrumentParamsViewer, YamlViewer,
                             FigureDisplayWidget, FolderTreeWidget, is_datafolder,
@@ -116,7 +116,8 @@ class DataBrowser(QMainWindow):
         self.apply_theme(theme)
 
         # --- Center window on leftmost screen ---
-        self.center_on_left_screen()
+        self.load_ui_settings()
+        # self.center_on_left_screen()
 
     def center_on_left_screen(self):
         screens = QApplication.screens()
@@ -166,6 +167,72 @@ class DataBrowser(QMainWindow):
         self.right_splitter.setSizes([int(0.7 * right_main_width), int(0.3 * right_main_width)])
         self.outer_splitter.setSizes([int(self.height() * 0.8), int(self.height() * 0.2)])
 
+    def _ensure_on_screen(self):
+        """If the saved geometry is off-screen (monitor unplugged etc), recenter."""
+        frame = self.frameGeometry()          # QRect in global coords
+        screens = QApplication.screens()
+        if not screens:
+            return
+        # If the window’s top-left isn’t contained in any screen, recenter.
+        top_left = frame.topLeft()
+        on_any = any(scr.geometry().contains(top_left) for scr in screens)
+        if not on_any:
+            self.center_on_left_screen()
+
+    def load_ui_settings(self):
+        s = QSettings("acadia", "DataBrowser")
+        # --- window frame ---
+        geo = s.value("main/geometry")
+        if geo is not None:
+            self.restoreGeometry(geo)
+        else:
+            self.center_on_left_screen()
+
+        state = s.value("main/windowState")
+        if state is not None:
+            self.restoreState(state)
+
+        # --- splitters ---
+        outer = s.value("splitters/outer")
+        if outer is not None:
+            self.outer_splitter.restoreState(outer)
+
+        main = s.value("splitters/main")
+        if main is not None:
+            self.main_splitter.restoreState(main)
+
+        right = s.value("splitters/right")
+        if right is not None:
+            self.right_splitter.restoreState(right)
+
+        # --- log window ---
+        log_geo = s.value("log/geometry")
+        if log_geo is not None:
+            self.log_window.restoreGeometry(log_geo)
+        visible = s.value("log/visible")
+        if visible is not None:
+            self.log_window.setVisible(visible == "true" or visible is True)
+
+        # Ensure the window is actually on a connected screen
+        self._ensure_on_screen()
+
+    def save_ui_settings(self):
+        s = QSettings("acadia", "DataBrowser")
+        s.setValue("main/geometry", self.saveGeometry())
+        s.setValue("main/windowState", self.saveState())
+
+        s.setValue("splitters/outer", self.outer_splitter.saveState())
+        s.setValue("splitters/main", self.main_splitter.saveState())
+        s.setValue("splitters/right", self.right_splitter.saveState())
+
+        s.setValue("log/geometry", self.log_window.saveGeometry())
+        s.setValue("log/visible", self.log_window.isVisible())
+
+    def closeEvent(self, event):
+        try:
+            self.save_ui_settings()
+        finally:
+            super().closeEvent(event)
 
 
 if __name__ == "__main__":

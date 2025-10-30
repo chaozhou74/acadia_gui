@@ -23,7 +23,7 @@ from PyQt5.QtCore import QTimer, Qt, QSize
 from PyQt5 import QtCore, QtGui
 from PyQt5.QtGui import QImage, QPainter, QFont, QIcon
 
-from acadia_qmsmt.helpers.saved_runtime_loader import insert_saved_qmsmt_module, get_saved_runtime_class
+from acadia_qmsmt.helpers.saved_runtime_loader import get_saved_runtime_class, load_runtime_from_data_dir
 from acadia_qmsmt.helpers import get_registered_plot_methods, get_data_process_method, get_registered_button_methods
 from acadia_qmsmt.helpers.annotation import AXS_SHAPE_TAG, get_registered_methods, get_registered_customizer
 from acadia_qmsmt.helpers.path_adapter import to_windows_path, detect_platform
@@ -352,12 +352,14 @@ class LivePlotWidget(QWidget):
 
         # Load the saved acadia_qmsmt.py as the acadia_qmsmt.qmsmt submodule
         try:
-            insert_saved_qmsmt_module(data_path)
+            # Get the saved runtime class and load runtime, with the saved acadia_qmsmt
+            self.runtime_class = get_saved_runtime_class(data_path, use_saved_qmsmt=True)
+
         except Exception as e:
             logger.warning(f"Failed to load the saved acadia_qmsmt.qmsmt submodule : {e}. "
                            f"Using the global version", exc_info=True)
-        # Get the saved runtime class and load runtime
-        self.runtime_class = get_saved_runtime_class(data_path)
+            self.runtime_class = get_saved_runtime_class(data_path, use_saved_qmsmt=False)
+
         self.rt = self.runtime_class.load(self.data_path)
 
         # run the customizer for programmatic plot/button modification if it exists
