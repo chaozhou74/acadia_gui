@@ -11,7 +11,7 @@ from PyQt5.QtCore import Qt, QModelIndex, QDir, QUrl, QSortFilterProxyModel, QOb
 from PyQt5.QtGui import QIcon, QDesktopServices, QColor, QBrush
 
 
-from acadia_qmsmt.helpers.path_adapter import detect_platform, to_windows_path
+from acadia_qmsmt.utils.path_adapter import detect_platform, to_windows_path
 from acadia_gui.icons import get_icon
 
 
