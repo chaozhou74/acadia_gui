@@ -7,7 +7,7 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QApplication
 
 from acadia_gui import CONFIG_PATH
-from acadia_qmsmt.helpers.path_adapter import detect_platform
+from acadia_qmsmt.utils.path_adapter import detect_platform
 
 
 logger = logging.getLogger(__name__)
