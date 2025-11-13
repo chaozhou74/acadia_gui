@@ -23,7 +23,7 @@ from PyQt5.QtCore import QTimer, Qt, QSize
 from PyQt5 import QtCore, QtGui
 from PyQt5.QtGui import QImage, QPainter, QFont, QIcon
 
-from acadia_qmsmt.utils.saved_runtime_loader import insert_saved_qmsmt_module, get_saved_runtime_class
+from acadia_qmsmt.utils.saved_runtime_loader import get_saved_runtime_class, load_runtime_from_data_dir
 from acadia_qmsmt.utils import get_registered_plot_methods, get_data_process_method, get_registered_button_methods
 from acadia_qmsmt.utils.annotation import AXS_SHAPE_TAG, get_registered_methods, get_registered_customizer
 from acadia_qmsmt.utils.path_adapter import to_windows_path, detect_platform
