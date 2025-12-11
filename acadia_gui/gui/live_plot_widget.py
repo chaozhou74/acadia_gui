@@ -705,14 +705,8 @@ class LivePlotWidget(QWidget):
 
         # input fields with type hint Literal will show as combobox (drop down menu)
         elif get_origin(annotation) is Literal:
-            widget = QComboBox()
-            widget.setObjectName("kwarg_combo_box")
             choices = get_args(annotation)
-            widget.addItems([str(c) for c in choices])
-            if default in choices:
-                widget.setCurrentText(str(default))
-            if update_callback is not None:
-                widget.currentIndexChanged.connect(update_callback)
+            widget = self._make_literal_kwarg(default, choices, update_callback)
 
         elif self.is_annotated_type(annotation):
             for arg in get_args(annotation):
@@ -723,26 +717,28 @@ class LivePlotWidget(QWidget):
                 return None
             type_hint, desc, *metadata = get_args(annotation)
             match desc:
-                case "slider":
-                    widget = self._make_slider_widget(default, *metadata, update_callback=update_callback)
+                # we should have a convention of capitalizing 1st letter, lower case is for backward compatibility here.
+                case "slider"|"Slider":
+                    widget = self._make_slider_kwarg(default, *metadata, update_callback=update_callback)
+                case "IOConfig":
+                    if len(metadata)!=1:
+                        logger.warning("IOConfig args must contain exactly 1 item: "
+                                       "`{channel_name}.{entry1}.{entry2}...`. Got {metadata}. Using the 1st item only")
+                    try:
+                        config_path = metadata[0].split(".")
+                        io, entries = config_path[0], config_path[1:]
+                        choices = self.rt._ios[io].get_config(*entries).keys()
+                        widget = self._make_literal_kwarg(default, choices, update_callback=update_callback)
+                    except Exception as e:
+                        logger.error(f"Error parsing annotated argument: {e}. Falling back to user input")
+                        widget = self._make_manual_input_kwarg(default, update_callback)
+
                 case _:
                     logger.error(f"Unsupported Annotated description: {desc}")
                     return None
 
         else: # generic inputs
-            widget = QLineEdit()
-            widget.setText(str(default))
-
-            def handle_return():
-                try: # generic inputs will try to be evaluated
-                    val = _safe_eval(widget.text())
-                    widget.setText(str(val))
-                except Exception:
-                    pass
-                if update_callback is not None:
-                    update_callback()
-
-            widget.returnPressed.connect(handle_return)
+            widget = self._make_manual_input_kwarg(default, update_callback)
 
         # Add label and widget side by side
         row_layout.addWidget(label_widget)
@@ -789,12 +785,41 @@ class LivePlotWidget(QWidget):
                 items_in_row = 0
 
         if items_in_row > 0:
+            if items_in_row <= 2:
+                row_layout.addStretch(1)  # keep single pair left-aligned
             layout.addLayout(row_layout)
 
         group_box.setVisible(bool(widgets))
         return widgets
 
-    def _make_slider_widget(self, default, *metadata, update_callback=None):
+
+    def _make_literal_kwarg(self, default, choices, update_callback=None):
+        widget = QComboBox()
+        widget.setObjectName("kwarg_combo_box")
+        widget.addItems([str(c) for c in choices])
+        if default in choices:
+            widget.setCurrentText(str(default))
+        if update_callback is not None:
+            widget.currentIndexChanged.connect(update_callback)
+        return widget
+
+    def _make_manual_input_kwarg(self, default, update_callback=None):
+        widget = QLineEdit()
+        widget.setText(str(default))
+
+        def handle_return():
+            try: # generic inputs will try to be evaluated
+                val = _safe_eval(widget.text())
+                widget.setText(str(val))
+            except Exception:
+                pass
+            if update_callback is not None:
+                update_callback()
+
+        widget.returnPressed.connect(handle_return)
+        return widget
+
+    def _make_slider_kwarg(self, default, *metadata, update_callback=None):
         if len(metadata) != 1:
             logger.warning("Slider metadata must contain exactly one item of type str")
         if isinstance(metadata[0], str):
