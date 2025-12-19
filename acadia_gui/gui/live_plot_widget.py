@@ -744,10 +744,12 @@ class LivePlotWidget(QWidget):
         row_layout.addWidget(label_widget)
         if isinstance(widget, tuple) or isinstance(widget, list):
             for widg in widget:
-                row_layout.addWidget(widg)
+                widg.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+                row_layout.addWidget(widg, 1)
             return widget[0] # assuming the first widget always has a gettable value
         else:
-            row_layout.addWidget(widget)
+            widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+            row_layout.addWidget(widget, 1)
             return widget
 
     def create_inputs_from_signature(self, func, layout: QVBoxLayout, group_box: QGroupBox,
