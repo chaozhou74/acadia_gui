@@ -550,6 +550,7 @@ class LivePlotWidget(QWidget):
                     proc_kwargs = parse_inputs(self.process_inputs)
                     try:
                         completed_iter = processor_func(**proc_kwargs)
+                        logger.debug(f"Processed data with completed_iter: {completed_iter} ")
                     except Exception as e:
                         logger.error(f"Error in data processing funciton "
                                      f"`{self.runtime_class.__name__}.{self.data_processor_name}`: {e}", exc_info=True)
@@ -647,7 +648,7 @@ class LivePlotWidget(QWidget):
 
 
     def _update_progress_bar(self, completed_iter):
-        self.progress_bar.setValue(completed_iter)
+        self.progress_bar.setValue(int(completed_iter))
 
         try:
             start_time = self.get_creation_time()

@@ -10,7 +10,7 @@ from acadia_gui.utils import set_qt_scaling, check_wsl_interop
 from acadia_gui.icons import get_icon
 
 logger = logging.getLogger("__name__")
-def acadia_gui(root_path:str = None, instrument_station=None, dark_mode=False):
+def launch_acadia_gui(root_path:str = None, instrument_station=None, dark_mode=False):
     """
     start the main acadia data browser gui
     :param root_path: path to the root data directory, default to the home directory
@@ -81,7 +81,7 @@ def acadia_gui_cli():
     else:
         client_station = None
 
-    acadia_gui(root_path=args.root_path, instrument_station=client_station, dark_mode=args.dark)
+    launch_acadia_gui(root_path=args.root_path, instrument_station=client_station, dark_mode=args.dark)
 
 
 
