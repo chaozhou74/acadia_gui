@@ -150,6 +150,10 @@ class FolderMonitorWorker(QObject):
         """
         logger.debug(f"Inspecting existing data folders under {path}...")
         for dirpath, dirnames, _ in os.walk(path, topdown=True):
+            if self._stop_event.is_set():
+                dirnames[:] = []  # prune children
+                break  # stop walking this branch
+
             # Skip Trash folders entirely
             if os.path.basename(dirpath) == TRASH_FOLDER_NAME:
                 dirnames[:] = []  # prune children
@@ -887,26 +891,30 @@ class FolderTreeWidget(QWidget):
             self.monitor_thread.deleteLater()
             self.monitor_thread = None
 
-        self.monitor_thread = QThread(self)
-        self.monitor_worker = FolderMonitorWorker(self.root_path)
-        self.monitor_worker.moveToThread(self.monitor_thread)
+        thread = QThread(self)
+        worker = FolderMonitorWorker(self.root_path)
 
-        self.monitor_thread.started.connect(self.monitor_worker.run)
-        self.monitor_worker.new_datafolder_found.connect(self.handle_new_datafolder)
-        self.monitor_worker.finished.connect(self.monitor_thread.quit)
-        self.monitor_worker.finished.connect(self.monitor_worker.deleteLater)
-        self.monitor_thread.finished.connect(self.monitor_thread.deleteLater)
+        worker.moveToThread(thread)
 
-        def _clear_refs():
-            self.monitor_worker = None
-            self.monitor_thread = None
-            # if user still wants it enabled but thread died unexpectedly,
-            # UI stays "enabled" and a future resume will recreate the thread.
-            self._set_recent_lock_ui()
+        thread.started.connect(worker.run)
+        worker.new_datafolder_found.connect(self.handle_new_datafolder)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
 
-        self.monitor_thread.finished.connect(_clear_refs)
+        def _clear_refs(t=thread):
+            # only clear if THIS thread is still the active one
+            if self.monitor_thread is t:
+                self.monitor_worker = None
+                self.monitor_thread = None
+                self._set_recent_lock_ui()
 
-        self.monitor_thread.start()
+        thread.finished.connect(_clear_refs)
+
+        self.monitor_thread = thread
+        self.monitor_worker = worker
+
+        thread.start()
         self._set_recent_lock_ui()
 
     def _pause_monitoring(self):
