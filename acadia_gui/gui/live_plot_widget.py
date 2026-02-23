@@ -341,6 +341,9 @@ class LivePlotWidget(QWidget):
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_plot)
 
+        # --- Autoscale cache ----
+        self._ax_state_before_action = {}  # (plot_name, ax_index, label) -> state dict
+
 
     def start(self, data_path):
         self.data_path = data_path
@@ -490,6 +493,7 @@ class LivePlotWidget(QWidget):
                                                                  self.plot_kwargs_box,
                                                                  update_callback=lambda: self.update_plot(force=True, reprocess_data=False))
         self.checked_right_click_flags.clear()
+        self._ax_state_before_action.clear()
 
         # if we already have data, just redo plot
         if self.completed_iter is not None:
@@ -1024,12 +1028,21 @@ class LivePlotWidget(QWidget):
             if is_checkable:
                 action.setChecked(label in self.checked_right_click_flags[key])
 
-                def toggler(checked, lbl=label, k=key, h=handler):
+                def toggler(checked, lbl=label, k=key, h=handler, ax=ax):
+                    state_key = (k[0], k[1], lbl)  # (plot_name, ax_index, label)
+
                     if checked:
+                        # snapshot BEFORE applying the action
+                        self._ax_state_before_action[state_key] = self._capture_ax_state(ax)
                         self.checked_right_click_flags[k].add(lbl)
                         h(ax)
                     else:
                         self.checked_right_click_flags[k].discard(lbl)
+                        # restore if we have a snapshot
+                        state = self._ax_state_before_action.pop(state_key, None)
+                        if state is not None:
+                            self._restore_ax_state(ax, state)
+                            self.canvas.draw_idle()
 
                 action.toggled.connect(toggler)
             else:
@@ -1042,7 +1055,8 @@ class LivePlotWidget(QWidget):
     def autoscale_ax(self, ax):
         # Autoscale line/plot data
         ax.set_autoscale_on(True)
-        ax.relim()
+        if not ax.collections and not ax.images:
+            ax.relim()  # safe for normal line plots
         ax.autoscale_view()
 
         # Try to autoscale color data (like pcolormesh)
@@ -1054,6 +1068,36 @@ class LivePlotWidget(QWidget):
                     if data.size > 0:
                         artist.set_clim(vmin=data.min(), vmax=data.max())
 
+        self.canvas.draw_idle()
+
+    def _capture_ax_state(self, ax):
+        state = {
+            "xlim": ax.get_xlim(),
+            "ylim": ax.get_ylim(),
+        }
+
+        # store a representative clim (first collection/image with clim)
+        clim = None
+        for artist in list(ax.collections) + list(ax.images):
+            if hasattr(artist, "get_clim") and hasattr(artist, "set_clim"):
+                try:
+                    clim = artist.get_clim()
+                    break
+                except Exception:
+                    pass
+        state["clim"] = clim
+        return state
+
+    def _restore_ax_state(self, ax, state):
+        ax.set_xlim(*state["xlim"])
+        ax.set_ylim(*state["ylim"])
+        if state.get("clim") is not None:
+            for artist in list(ax.collections) + list(ax.images):
+                if hasattr(artist, "set_clim"):
+                    try:
+                        artist.set_clim(*state["clim"])
+                    except Exception:
+                        pass
         self.canvas.draw_idle()
 
 
@@ -1313,6 +1357,7 @@ class LivePlotWidget(QWidget):
         # Reset dropdown and state
         self.plot_selector.clear()
         self.checked_right_click_flags.clear()
+        self._ax_state_before_action.clear()
         self.current_plot_name = None
         self.plot_registry = {}
 
