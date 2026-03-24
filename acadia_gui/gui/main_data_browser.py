@@ -211,7 +211,9 @@ class DataBrowser(QMainWindow):
             self.log_window.restoreGeometry(log_geo)
         visible = s.value("log/visible")
         if visible is not None:
-            self.log_window.setVisible(visible == "true" or visible is True)
+            is_visible = visible == "true" or visible is True
+            self.log_window.setVisible(is_visible)
+            self.menu_bar.show_log_action.setChecked(is_visible)
 
         # Ensure the window is actually on a connected screen
         self._ensure_on_screen()
