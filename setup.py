@@ -4,6 +4,9 @@ setup(
       name='acadia_gui',
       version='0.0.1',
       packages=find_packages(),
+      package_data={
+          'acadia_gui': ['icons/*.svg', 'themes/*.css'],
+      },
       entry_points={
             'console_scripts': [
                   'acadia_gui = acadia_gui.apps:acadia_gui_cli',

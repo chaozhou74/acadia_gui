@@ -2,6 +2,9 @@
 QWidget {
     background-color: #3a3a3a;
     color: #dcdcdc;
+}
+
+QTextEdit, QPlainTextEdit, QTextBrowser {
     font-family: Consolas, Menlo, monospace;
 }
 
@@ -27,8 +30,8 @@ QMenu {
     border: 1px solid #444;
 }
 QMenu::item:selected {
-    background-color: #3a70b2;
-    color: #ffffff;
+    background-color: #444444;
+    color: #4a90e2;
 }
 
 /* ========== BUTTONS ========== */
@@ -46,6 +49,11 @@ QPushButton:hover {
 QPushButton:pressed {
     background-color: #2a2a2a;
     border-color: #555;
+}
+QPushButton:disabled {
+    background-color: #383838;
+    color: #5a5a5a;
+    border-color: #444;
 }
 
 /* Hover-only buttons */
@@ -121,6 +129,11 @@ QToolButton:checked {
     border: 1px solid #74baff;
     color: white;
 }
+QToolButton:disabled {
+    background-color: #383838;
+    color: #5a5a5a;
+    border-color: #444;
+}
 QToolBar::separator {
     background-color: #888888;
     width: 1px;
@@ -128,12 +141,27 @@ QToolBar::separator {
 }
 
 /* ========== INPUT FIELDS ========== */
-QLineEdit, QTextEdit, QPlainTextEdit, QComboBox {
+QLineEdit, QTextEdit, QPlainTextEdit{
     background-color: #292929;
     border: 1px solid #555;
     border-radius: 4px;
     color: #f0f0f0;
     padding: 4px;
+}
+QLineEdit:disabled, QTextEdit:disabled, QPlainTextEdit:disabled {
+    background-color: #303030;
+    color: #5a5a5a;
+    border-color: #444;
+}
+
+/* ======= Combo Box ===========*/
+QComboBox QAbstractItemView {
+    background-color: #292929;
+    border: 1px solid #555;
+    color: #f0f0f0;
+    selection-color: #4a90e2; /* fixme: somehow this is not working*/
+    selection-background-color: #444444;
+    outline: 0;
 }
 
 /* ========== SCROLLBARS ========== */

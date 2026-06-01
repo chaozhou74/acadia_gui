@@ -148,7 +148,14 @@ class DataBrowser(QMainWindow):
                 qss = f.read()
                 # Replace placeholder with an absolute path to your icon folder
                 qss = qss.replace("__ICON_PATH__", ICON_PATH)
-                self.setStyleSheet(qss)
+                # Apply at the application level so the stylesheet also reaches
+                # top-level popup windows (e.g. QComboBox dropdown containers),
+                # which do not inherit a stylesheet set on an ancestor widget.
+                app = QApplication.instance()
+                if app is not None:
+                    app.setStyleSheet(qss)
+                else:
+                    self.setStyleSheet(qss)
         except Exception as e:
             logger.error(f"Failed to apply theme {theme_name}: {e}")
 
