@@ -15,7 +15,7 @@ from acadia_gui.gui import (LogViewer, InstrumentParamsViewer, YamlViewer,
                             AppMenuBar, KwargsJsonViewer, GuiLogWindow, GuiLogHandler)
 from acadia_gui import THEME_PATH
 from acadia_gui.utils import set_qt_scaling, load_user_config, get_qt_scaling, update_user_config
-from acadia_gui.icons import ICON_PATH
+from acadia_gui.icons import ICON_PATH, set_icon_color, icon_color_for_theme
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +67,12 @@ class DataBrowser(QMainWindow):
         self.setWindowTitle("Data Browser")
         self.resize(1600, 1000)
 
+        # Resolve the theme up front so widget icons are recolored as they're
+        # built (get_icon reads the active icon color at construction time).
+        if theme is None:
+            theme = load_user_config().get("theme") or "default"
+        set_icon_color(icon_color_for_theme(theme))
+
         # --- Menu Bar ---
         self.menu_bar = AppMenuBar(parent=self, apply_theme_callback=self.apply_theme)
         self.setMenuBar(self.menu_bar)
@@ -109,9 +115,6 @@ class DataBrowser(QMainWindow):
         central_layout.addWidget(self.outer_splitter)
         central_widget.setLayout(central_layout)
         self.setCentralWidget(central_widget)
-
-        if theme is None:
-            theme = load_user_config().get("theme") or "default"
 
         self.apply_theme(theme)
 
@@ -158,6 +161,12 @@ class DataBrowser(QMainWindow):
                     self.setStyleSheet(qss)
         except Exception as e:
             logger.error(f"Failed to apply theme {theme_name}: {e}")
+
+        # recolor `currentColor` icons for the new theme and refresh those already
+        # shown (the plot toolbar icons are refreshed via set_theme below)
+        set_icon_color(icon_color_for_theme(theme_name))
+        self.menu_bar.reload_icons()
+        self.folder_tree.reload_icons()
 
         # forward to central matplotlib plot
         self.figure_display.set_theme(theme_name)

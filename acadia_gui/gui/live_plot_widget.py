@@ -28,7 +28,7 @@ from acadia_qmsmt.utils import get_registered_plot_methods, get_data_process_met
 from acadia_qmsmt.utils.annotation import AXS_SHAPE_TAG, get_registered_methods, get_registered_customizer
 from acadia_qmsmt.utils.path_adapter import to_windows_path, detect_platform
 
-from acadia_gui.icons import get_icon
+from acadia_gui.icons import get_icon, style_mpl_toolbar
 
 
 # files used for rough estimate of progress rate, ETA, etc
@@ -1328,14 +1328,26 @@ class LivePlotWidget(QWidget):
 
     # --------- theme ------------
     def set_theme(self, theme_name):
+        dark = "dark" in theme_name.lower()
+
+        # refresh our toolbar icons (currentColor) + matplotlib's nav icons
+        self._pause_icon = get_icon("pause_plot.svg")
+        self._resume_icon = get_icon("resume_plot.svg")
+        self.pause_button.setIcon(self._resume_icon if self.is_paused else self._pause_icon)
+        self.snapshot_button.setIcon(get_icon("snapshot_plot.svg"))
+        style_mpl_toolbar(self.toolbar, dark)
+
         from matplotlib import style as mpl_style
         from matplotlib import rcdefaults
         rcdefaults()
-        if "dark" in theme_name.lower():
+        if dark:
+            # mplcyberpunk is an optional extra; fall back to a built-in dark
+            # style if it's missing or ever fails to load, so it can never break
+            # plotting.
             try:
-                import mplcyberpunk
+                import mplcyberpunk  # noqa: F401
                 mpl_style.use("cyberpunk")
-            except ModuleNotFoundError:
+            except Exception:
                 mpl_style.use("dark_background")
         else:
             mpl_style.use("default")

@@ -16,6 +16,9 @@ setup(
         'pyqt5',
         'psutil', # for overall memory usage monitoring
         'pympler', # python object memory usage tracking
-        'ruamel.yaml'
+        'ruamel.yaml',
+        # safe to hard-require: tiny pure-Python pkg, and set_theme() falls back
+        # to a built-in dark style if it's ever missing or fails to load.
+        'mplcyberpunk',
     ]
 )

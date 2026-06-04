@@ -108,6 +108,10 @@ class AppMenuBar(QMenuBar):
         self.setCornerWidget(corner_widget, Qt.TopRightCorner)
         corner_widget.adjustSize()
 
+    def reload_icons(self):
+        """Re-apply icons so they pick up the current theme's color."""
+        self.toggle_right_tabs_button.setIcon(get_icon("collapse_right_tabs.svg"))
+
     def _load_themes(self):
         self.theme_menu.clear()
         theme_dir = Path(THEME_PATH)

@@ -37,7 +37,7 @@ def launch_acadia_gui(root_path:str = None, instrument_station=None, dark_mode=F
     setup_desktop_on_launch()
     window = DataBrowser(root_path, instrument_station, theme="dark" if dark_mode else None)
     window.setWindowTitle(APP_NAME)
-    window.setWindowIcon(get_icon("app_icon.svg"))  # your icon file here
+    window.setWindowIcon(get_icon("app_icon.svg", recolor=False))  # your icon file here
     window.show()
     sys.exit(app.exec_())
 

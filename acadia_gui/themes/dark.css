@@ -104,10 +104,10 @@ QPushButton#stop_button:hover {
 
 /* Disabled STOP button */
 QPushButton#stop_button:disabled {
-    background-color: #fddfdf;
-    color: #666;
-    border: 1px solid #999;
-    border-radius: 2px;
+    background-color: #5e2b2b;
+    color: #b08a8a;
+    border: 1px solid #7a3b3b;
+    border-radius: 4px;
 }
 
 

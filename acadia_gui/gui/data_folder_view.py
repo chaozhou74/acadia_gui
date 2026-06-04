@@ -866,6 +866,13 @@ class FolderTreeWidget(QWidget):
         self.match_label.setVisible(False)
         self.last_expanded_path = None
 
+    def reload_icons(self):
+        """Re-apply toolbar icons so they pick up the current theme's color."""
+        self.refresh_button.setIcon(get_icon("refresh.svg"))
+        self.sort_mtime_button.setIcon(get_icon("sort_by_time.svg"))
+        self.search_button.setIcon(get_icon("search.svg"))
+        self._set_recent_lock_ui()  # recent button (lock state aware)
+
     # -------------- monitor and lock to the most recent folder ----------
     def _set_recent_lock_ui(self):
         # locked icon when enabled, unlocked when disabled

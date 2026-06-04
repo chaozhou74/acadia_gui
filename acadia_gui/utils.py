@@ -95,7 +95,7 @@ def _render_hicolor_pngs(app_id=APP_ID, sizes=(16, 24, 32, 48, 64, 128, 256), ma
     """Render padded PNGs into the user XDG icon theme; returns the hicolor root."""
     from acadia_gui.icons import get_icon
 
-    icon = get_icon("app_icon.svg")
+    icon = get_icon("app_icon.svg", recolor=False)
     root = Path.home() / ".local/share/icons/hicolor"
     for s in sizes:
         dest = root / f"{s}x{s}/apps/{app_id}.png"
