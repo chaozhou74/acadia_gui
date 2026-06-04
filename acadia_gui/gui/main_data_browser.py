@@ -14,7 +14,7 @@ from acadia_gui.gui import (LogViewer, InstrumentParamsViewer, YamlViewer,
                             FigureDisplayWidget, FolderTreeWidget, is_datafolder,
                             AppMenuBar, KwargsJsonViewer, GuiLogWindow, GuiLogHandler)
 from acadia_gui import THEME_PATH
-from acadia_gui.utils import set_qt_scaling, load_user_config, get_qt_scaling
+from acadia_gui.utils import set_qt_scaling, load_user_config, get_qt_scaling, update_user_config
 from acadia_gui.icons import ICON_PATH
 
 logger = logging.getLogger(__name__)
@@ -236,6 +236,9 @@ class DataBrowser(QMainWindow):
 
         s.setValue("log/geometry", self.log_window.saveGeometry())
         s.setValue("log/visible", self.log_window.isVisible())
+
+        # remember the data root so the next launch reopens it (see resolve_startup_root)
+        update_user_config(last_root=self.folder_tree.root_path)
 
     def closeEvent(self, event):
         try:

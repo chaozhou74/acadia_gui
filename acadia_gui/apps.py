@@ -9,7 +9,7 @@ from acadia_gui import APP_ID, APP_NAME
 from acadia_gui.gui import DataBrowser
 from acadia_gui.utils import (
     set_qt_scaling, check_wsl_interop, set_wsl_display_backend,
-    install_desktop_integration, setup_desktop_on_launch
+    install_desktop_integration, setup_desktop_on_launch, resolve_startup_root
 )
 from acadia_gui.icons import get_icon
 
@@ -24,10 +24,9 @@ def launch_acadia_gui(root_path:str = None, instrument_station=None, dark_mode=F
     # Check if running in WSL and warn about missing interop setting
     check_wsl_interop()
 
-    if root_path is None:
-        root_path = str(Path.home())
-    else:
-        root_path = str(root_path)
+    # No explicit root -> reopen the last used one (or its nearest existing
+    # ancestor), falling back to the home directory.
+    root_path = resolve_startup_root(root_path)
     set_wsl_display_backend()
     set_qt_scaling()
     app = QApplication(sys.argv)
@@ -89,7 +88,7 @@ def acadia_gui_cli():
 
     if args.root_path is not None and not args.root_path.exists():
         logger.warning(f"Provided root_path does not exist: {args.root_path}. "
-                       f"Starting gui with home directory as root data path")
+                       f"Falling back to the last opened root (or home).")
         args.root_path = None
 
     if args.station_config is not None:

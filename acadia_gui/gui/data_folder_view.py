@@ -13,6 +13,7 @@ from PyQt5.QtGui import QIcon, QDesktopServices, QColor, QBrush
 
 from acadia_qmsmt.utils.path_adapter import detect_platform, to_windows_path
 from acadia_gui.icons import get_icon
+from acadia_gui.utils import load_user_config, update_user_config
 
 
 TRASH_FOLDER_NAME = "Trash"
@@ -427,6 +428,10 @@ class FolderTreeWidget(QWidget):
         self.monitor_thread = None
         self.destroyed.connect(self.stop_monitoring)
 
+        # restore the persisted auto-jump-to-newest preference
+        if load_user_config().get("auto_jump_to_newest"):
+            self.start_monitoring()
+
 
     # ---------- path/index helpers ----------
     def path_to_source_index(self, path: str) -> QModelIndex:
@@ -502,6 +507,9 @@ class FolderTreeWidget(QWidget):
             self.model.setRootPath(root_path)
             self.tree.setRootIndex(self.proxy_model.mapFromSource(self.model.index(root_path)))
             self.root_path = root_path
+
+            # remember this root for the next launch
+            update_user_config(last_root=root_path)
 
             # clear navigation history
             self.history = []
@@ -878,6 +886,9 @@ class FolderTreeWidget(QWidget):
                 self.stop_monitoring()  # flips flag OFF
             else:
                 self.start_monitoring()  # flips flag ON
+            # persist only on explicit user toggle (stop_monitoring also runs on
+            # close, so saving there would wipe the preference every exit)
+            update_user_config(auto_jump_to_newest=self.recent_lock_enabled)
 
     def start_monitoring(self):
         self.recent_lock_enabled = True

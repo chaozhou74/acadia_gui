@@ -257,14 +257,51 @@ def setup_desktop_on_launch():
 
 
 def load_user_config():
-    if CONFIG_PATH.exists():
-        with open(CONFIG_PATH, "r") as f:
-            return json.load(f)
+    try:
+        if CONFIG_PATH.exists():
+            with open(CONFIG_PATH, "r") as f:
+                return json.load(f)
+    except Exception as e:
+        logger.warning(f"Could not read user config ({CONFIG_PATH}): {e}")
     return {}
 
 def save_user_config(config):
-    with open(CONFIG_PATH, "w") as f:
-        json.dump(config, f, indent=2)
+    try:
+        with open(CONFIG_PATH, "w") as f:
+            json.dump(config, f, indent=2)
+    except Exception as e:
+        logger.warning(f"Could not write user config ({CONFIG_PATH}): {e}")
+
+
+def update_user_config(**kwargs):
+    """Merge key/values into the persisted user config and save it."""
+    config = load_user_config()
+    config.update(kwargs)
+    save_user_config(config)
+    return config
+
+
+def resolve_startup_root(cli_root=None):
+    """Resolve the data root folder to open at startup.
+
+    Precedence:
+      1. an explicit CLI root, if it exists;
+      2. the last opened root from config, climbing to its nearest existing
+         ancestor if the exact path is gone (but never settling on "/"); else
+      3. the home directory.
+    """
+    if cli_root:
+        p = Path(cli_root)
+        if p.is_dir():
+            return str(p)
+    last = load_user_config().get("last_root")
+    if last:
+        p = Path(last)
+        while p != p.parent:  # climb toward, but stop before, the filesystem root
+            if p.is_dir():
+                return str(p)
+            p = p.parent
+    return str(Path.home())
 
 
 def set_qt_scaling(scale=None):
