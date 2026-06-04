@@ -86,6 +86,21 @@ To generate live plotting, the Runtime class must define:
 	  pip install -e  .
 	  ```
 
+- **Add the app to the application launcher**
+	- **Native Linux** (Ubuntu 22+): nothing to do — the launcher entry is installed
+	  automatically the first time you start the GUI, and the app appears in your
+	  application menu / dock. (You can re-run `acadia_gui --install-desktop` to refresh
+	  it, e.g. after moving the virtual environment.)
+	- **WSL**: run this once after installing, then restart WSL:
+	  ```bash
+	  acadia_gui --install-desktop   # asks for sudo once
+	  ```
+	  ```
+	  wsl --shutdown                 # from Windows; relaunch afterwards
+	  ```
+	  The app then appears in the Windows Start Menu (as `Acadia Data Browser (<distro>)`)
+	  with a working launcher and taskbar icon.
+
 - **Starting the gui**
 	- Once installed, an "entry point" called acadia_gui will be available in the virtual environment. So gui can be
 	  simply launched by running
@@ -101,6 +116,11 @@ To generate live plotting, the Runtime class must define:
 
 ## Trouble shooting
 -  **Error loading 'xcb' Plugin**
+
+   > **Note:** On WSL the app now defaults to the **Wayland** backend, so this error
+   > should no longer occur out of the box. The fix below is only needed if Wayland is
+   > unavailable and you must fall back to `xcb` (e.g. you set `QT_QPA_PLATFORM=xcb`
+   > yourself, or run on a non-WSLg setup).
 
    When running for the first time on WSL, a common error is:
     ```

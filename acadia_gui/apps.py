@@ -5,8 +5,12 @@ import logging
 
 from PyQt5.QtWidgets import QApplication
 
+from acadia_gui import APP_ID, APP_NAME
 from acadia_gui.gui import DataBrowser
-from acadia_gui.utils import set_qt_scaling, check_wsl_interop
+from acadia_gui.utils import (
+    set_qt_scaling, check_wsl_interop, set_wsl_display_backend,
+    install_desktop_integration, setup_desktop_on_launch
+)
 from acadia_gui.icons import get_icon
 
 logger = logging.getLogger("__name__")
@@ -24,10 +28,16 @@ def launch_acadia_gui(root_path:str = None, instrument_station=None, dark_mode=F
         root_path = str(Path.home())
     else:
         root_path = str(root_path)
+    set_wsl_display_backend()
     set_qt_scaling()
     app = QApplication(sys.argv)
+    # Wayland resolves the window/taskbar icon via the app_id (the desktop-file
+    # name); without it WSLg falls back to a generic icon.
+    app.setApplicationName(APP_NAME)
+    app.setDesktopFileName(APP_ID)
+    setup_desktop_on_launch()
     window = DataBrowser(root_path, instrument_station, theme="dark" if dark_mode else None)
-    window.setWindowTitle("Acadia Data Browser")
+    window.setWindowTitle(APP_NAME)
     window.setWindowIcon(get_icon("app_icon.svg"))  # your icon file here
     window.show()
     sys.exit(app.exec_())
@@ -60,7 +70,22 @@ def acadia_gui_cli():
     # use dark mode at start
     parser.add_argument('-d', '--dark', action='store_true', help='Enable dark mode')
 
+    # Register the app with the OS launcher and exit. On native Linux this writes
+    # a user-local desktop entry (no sudo); on WSL it installs system-wide (one
+    # sudo prompt) so WSLg generates the Windows Start Menu shortcut + icon.
+    parser.add_argument('--install-desktop', action='store_true',
+                        help='Add the app to the application launcher (Linux: no sudo; '
+                             'WSL: system-wide, one sudo prompt), then exit.')
+
     args = parser.parse_args()
+
+    if args.install_desktop:
+        # Render the icon offscreen so this works without a display/compositor.
+        import os
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        app = QApplication(sys.argv)  # keep a reference; icon rendering needs it alive
+        install_desktop_integration(verbose=True)
+        return
 
     if args.root_path is not None and not args.root_path.exists():
         logger.warning(f"Provided root_path does not exist: {args.root_path}. "
