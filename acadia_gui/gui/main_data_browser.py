@@ -204,6 +204,22 @@ class DataBrowser(QMainWindow):
         else:
             self.center_on_left_screen()
 
+        # Decide whether to end up maximized: explicit flag if present, else
+        # infer from the (possibly legacy) restored geometry blob.
+        if s.contains("main/maximized"):
+            want_maximized = s.value("main/maximized", type=bool)
+        else:
+            want_maximized = self.isMaximized()
+
+        # Starting out maximized on the *initial* Wayland surface map makes Qt
+        # commit a normal-size buffer that mismatches the compositor's maximized
+        # size -> fatal xdg_surface protocol error. Show normal first, then
+        # re-maximize once the surface is mapped (a normal maximize transition,
+        # which Wayland handles fine). Harmless on X11/Windows.
+        self.setWindowState(self.windowState() & ~Qt.WindowMaximized)
+        if want_maximized:
+            QTimer.singleShot(0, self.showMaximized)
+
         state = s.value("main/windowState")
         if state is not None:
             self.restoreState(state)
@@ -231,13 +247,16 @@ class DataBrowser(QMainWindow):
             self.log_window.setVisible(is_visible)
             self.menu_bar.show_log_action.setChecked(is_visible)
 
-        # Ensure the window is actually on a connected screen
-        self._ensure_on_screen()
+        # Ensure the window is actually on a connected screen (skip when
+        # maximized; the compositor controls placement on Wayland)
+        if not want_maximized:
+            self._ensure_on_screen()
 
     def save_ui_settings(self):
         s = QSettings("acadia", "DataBrowser")
         s.setValue("main/geometry", self.saveGeometry())
         s.setValue("main/windowState", self.saveState())
+        s.setValue("main/maximized", self.isMaximized())
 
         s.setValue("splitters/outer", self.outer_splitter.saveState())
         s.setValue("splitters/main", self.main_splitter.saveState())
