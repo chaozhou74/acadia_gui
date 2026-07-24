@@ -135,12 +135,14 @@ class DataBrowser(QMainWindow):
         self.figure_display.clear()
         self.right_tabs.clear()
 
-        if not is_datafolder(folder_path):
-            return
-
-        force_garbage_collect()
-        self.figure_display.load_images(folder_path)
-        self.right_tabs.update_content(folder_path)
+        if is_datafolder(folder_path):
+            force_garbage_collect()
+            self.figure_display.load_images(folder_path)
+            self.right_tabs.update_content(folder_path)
+        else:
+            # Not an Acadia data folder, but still render any pictures it
+            # contains so plain image folders are browsable in the plot view.
+            self.figure_display.load_images(folder_path, is_data_folder=False)
 
     def apply_theme(self, theme_name):
         try:

@@ -11,6 +11,9 @@ from acadia_gui.gui.live_plot_widget import LivePlotWidget
 
 logger = logging.getLogger(__name__)
 
+# Image formats we can render in the plot view.
+IMAGE_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp', '.tif', '.tiff')
+
 class FigureDisplayWidget(QWidget):
     def __init__(self):
         super().__init__()
@@ -78,23 +81,33 @@ class FigureDisplayWidget(QWidget):
         self.load_pickle_button.setEnabled(False)
         self.switch_to_live_button.setEnabled(False)
 
-    def load_images(self, folder_path):
+    def load_images(self, folder_path, is_data_folder=True):
+        """Display the images found in ``folder_path``.
+
+        :param is_data_folder: Whether this is an Acadia data folder (has run.py).
+            Data-folder-only features (live mode, loading the matplotlib
+            pickle, and the live-plot fallback for empty folders) are only
+            enabled for actual data folders. Plain folders simply show
+            whatever pictures they contain.
+        """
         self.folder_path = folder_path
-        png_files = [f for f in os.listdir(folder_path) if f.lower().endswith('.png')]
-        self.png_paths = [os.path.join(folder_path, f) for f in png_files]
-        self.png_paths = sorted(self.png_paths) # sort alphabetically
+        image_files = [f for f in os.listdir(folder_path)
+                       if f.lower().endswith(IMAGE_EXTENSIONS)]
+        self.png_paths = sorted(os.path.join(folder_path, f) for f in image_files)
         self.figure_selector.clear()
 
         if self.png_paths:
             self.stack.setCurrentIndex(0)
             self.folder_label.setText(folder_path)
-            self.load_pickle_button.setEnabled(True)
-            self.switch_to_live_button.setEnabled(True)
+            self.load_pickle_button.setEnabled(is_data_folder)
+            self.switch_to_live_button.setEnabled(is_data_folder)
             self.figure_selector.addItems([os.path.basename(f) for f in self.png_paths])
             self.show_selected_image(0)
             self.live_plot.stop()
-        else:
+        elif is_data_folder:
             self.plot_live_mode()
+        else:
+            self.image_label.setText("No images to display")
 
     def plot_live_mode(self):
         if self.folder_path:
