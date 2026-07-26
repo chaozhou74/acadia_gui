@@ -239,6 +239,14 @@ class DataBrowser(QMainWindow):
         if right is not None:
             self.right_splitter.restoreState(right)
 
+        # restoreState() restores each pane's individual collapsible flag from
+        # whatever was saved previously (which overrides childrenCollapsible),
+        # so re-assert non-collapsible per pane here rather than at construction.
+        for splitter in (self.main_splitter, self.right_splitter):
+            splitter.setChildrenCollapsible(False)
+            for i in range(splitter.count()):
+                splitter.setCollapsible(i, False)
+
         # --- log window ---
         log_geo = s.value("log/geometry")
         if log_geo is not None:

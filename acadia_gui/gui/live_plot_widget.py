@@ -21,7 +21,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import QTimer, Qt, QSize
 from PyQt5 import QtCore, QtGui
-from PyQt5.QtGui import QImage, QPainter, QFont, QIcon
+from PyQt5.QtGui import QImage, QPainter, QFont, QIcon, QFontMetrics
 
 from acadia_qmsmt.utils.saved_runtime_loader import get_saved_runtime_class, load_runtime_from_data_dir
 from acadia_qmsmt.utils import get_registered_plot_methods, get_data_process_method, get_registered_button_methods
@@ -219,6 +219,13 @@ class LivePlotWidget(QWidget):
         self.folder_label = QLabel(" ")
         self.folder_label.setAlignment(Qt.AlignCenter)
         self.folder_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        # Deep/long folder paths must not dictate this widget's minimum width
+        # (an un-elided QLabel's minimum width is its full text width). Since
+        # this widget sits alongside the static image view in a QStackedLayout,
+        # which sizes to the max minimum size across ALL pages, an unbounded
+        # label here forces a huge minimum even while the static page is shown.
+        self.folder_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self._full_folder_path = ""
         self.plot_axes = None
         self.last_axs_shape = None
 
@@ -347,8 +354,8 @@ class LivePlotWidget(QWidget):
 
     def start(self, data_path):
         self.data_path = data_path
-        # self.folder_label.setText(f"{os.path.basename(data_path)}")
-        self.folder_label.setText(data_path)
+        self._full_folder_path = data_path
+        self._update_folder_label()
         self.is_paused = False
         self.last_mtime = 0
         self.completed_iter = None
@@ -418,6 +425,16 @@ class LivePlotWidget(QWidget):
         self.canvas.draw()
         self.ready = False
         self.completed_iter = None
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_folder_label()
+
+    def _update_folder_label(self):
+        metrics = QFontMetrics(self.folder_label.font())
+        elided = metrics.elidedText(self._full_folder_path, Qt.ElideMiddle, self.folder_label.width())
+        self.folder_label.setText(elided)
+        self.folder_label.setToolTip(self._full_folder_path)
 
 
     def toggle_pause(self):
@@ -1382,6 +1399,9 @@ class LivePlotWidget(QWidget):
         self.stop_button.setText("STOP")
 
         # Also clear these for sanity
+        self._full_folder_path = ""
+        self.folder_label.setText(" ")
+        self.folder_label.setToolTip("")
         self.data_path = None
         self.rt = None
         self.runtime_class = None
@@ -1399,3 +1419,22 @@ class LivePlotWidget(QWidget):
 
         self.canvas.figure.clf()
         self.canvas.draw()
+
+        # The kwarg/button group boxes just got emptied above. The QVBoxLayout
+        # that places these 3 boxes (kwargs_row) caches each box's minimum size
+        # per-widget (QWidgetItemV2) independent of the box's own, freshly-small
+        # minimumSizeHint(); that cache is flushed only by updateGeometry() on
+        # the box itself.
+        for box in (self.process_kwargs_box, self.plot_kwargs_box, self.update_buttons_box):
+            box.updateGeometry()
+
+        # Even with the per-box caches flushed, the ancestor layouts' own
+        # cached total size isn't recomputed until something processes the
+        # QEvent::LayoutRequest that updateGeometry() posts -- which Qt skips
+        # delivering while this widget is hidden (as it is whenever we're not
+        # the active stack page, i.e. exactly when clear() tends to run).
+        # Force a synchronous recompute instead so this widget's own minimum size
+        # shrinks back down immediately rather than staying pinned at
+        # whatever it was the last time kwargs were populated here.
+        self.layout().invalidate()
+        self.layout().activate()

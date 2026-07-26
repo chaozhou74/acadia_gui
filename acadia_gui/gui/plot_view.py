@@ -2,9 +2,10 @@ import os
 import pickle
 import logging
 from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QLabel, QComboBox, QPushButton, QStackedLayout, QHBoxLayout
+    QWidget, QVBoxLayout, QLabel, QComboBox, QPushButton, QStackedLayout, QHBoxLayout,
+    QSizePolicy
 )
-from PyQt5.QtGui import QPixmap
+from PyQt5.QtGui import QPixmap, QFontMetrics
 from PyQt5.QtCore import Qt
 
 from acadia_gui.gui.live_plot_widget import LivePlotWidget
@@ -53,6 +54,13 @@ class FigureDisplayWidget(QWidget):
         self.folder_label = QLabel(" ")
         self.folder_label.setAlignment(Qt.AlignCenter)
         self.folder_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        # Deep/long folder paths must not dictate this widget's minimum width
+        # (an un-elided QLabel's minimum width is its full text width, which
+        # can exceed the whole window for deeply nested paths and jam the
+        # splitter). Ignored lets the layout shrink it freely; the full path
+        # is still available via elided text + tooltip.
+        self.folder_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self._full_folder_path = ""
 
         png_layout = QVBoxLayout(self.png_view)
         png_layout.addWidget(self.folder_label)
@@ -98,7 +106,8 @@ class FigureDisplayWidget(QWidget):
 
         if self.png_paths:
             self.stack.setCurrentIndex(0)
-            self.folder_label.setText(folder_path)
+            self._full_folder_path = folder_path
+            self._update_folder_label()
             self.load_pickle_button.setEnabled(is_data_folder)
             self.switch_to_live_button.setEnabled(is_data_folder)
             self.figure_selector.addItems([os.path.basename(f) for f in self.png_paths])
@@ -138,6 +147,13 @@ class FigureDisplayWidget(QWidget):
         super().resizeEvent(event)
         if self.stack.currentIndex() == 0:
             self.show_selected_image(self.figure_selector.currentIndex())
+        self._update_folder_label()
+
+    def _update_folder_label(self):
+        metrics = QFontMetrics(self.folder_label.font())
+        elided = metrics.elidedText(self._full_folder_path, Qt.ElideMiddle, self.folder_label.width())
+        self.folder_label.setText(elided)
+        self.folder_label.setToolTip(self._full_folder_path)
 
     def load_pickle(self):
         index = self.figure_selector.currentIndex()
@@ -172,5 +188,7 @@ class FigureDisplayWidget(QWidget):
         self.load_pickle_button.setEnabled(False)
         self.switch_to_live_button.setEnabled(False)
         self.live_plot.clear()
+        self._full_folder_path = ""
         self.folder_label.setText(" ")
+        self.folder_label.setToolTip("")
         self.stack.setCurrentIndex(0)
