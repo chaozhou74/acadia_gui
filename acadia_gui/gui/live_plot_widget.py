@@ -225,6 +225,7 @@ class LivePlotWidget(QWidget):
         # which sizes to the max minimum size across ALL pages, an unbounded
         # label here forces a huge minimum even while the static page is shown.
         self.folder_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self.folder_label.setVisible(False)   # path is shown in the CenterView header
         self._full_folder_path = ""
         self.plot_axes = None
         self.last_axs_shape = None

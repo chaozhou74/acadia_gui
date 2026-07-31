@@ -189,3 +189,25 @@ QGroupBox::title {
     padding: 0 6px;
     background-color: #f0f0f0;  /* optional: highlight title */
 }
+
+/* Plot | SeeQuence toggle -- clearly clickable buttons; blue accent when active
+   (not grey), and no bold so the checked label never clips */
+QPushButton#viewToggle {
+    background-color: #ececec;
+    border: 1px solid #c2c2c2;
+    border-radius: 5px;
+    padding: 5px 16px;
+    color: #333333;
+}
+QPushButton#viewToggle:hover {
+    background-color: #e6e6e6;
+    border-color: #235b98;
+}
+QPushButton#viewToggle:checked {
+    background-color: #e3eefb;
+    border: 1px solid #235b98;   /* icon blue */
+    color: #235b98;
+}
+QLabel#centerPath {
+    color: #666666;
+}

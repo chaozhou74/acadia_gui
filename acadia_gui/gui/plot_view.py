@@ -60,6 +60,7 @@ class FigureDisplayWidget(QWidget):
         # splitter). Ignored lets the layout shrink it freely; the full path
         # is still available via elided text + tooltip.
         self.folder_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self.folder_label.setVisible(False)   # path now shown in the CenterView header
         self._full_folder_path = ""
 
         png_layout = QVBoxLayout(self.png_view)

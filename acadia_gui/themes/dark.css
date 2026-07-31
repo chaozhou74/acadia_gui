@@ -56,6 +56,28 @@ QPushButton:disabled {
     border-color: #444;
 }
 
+/* Plot | SeeQuence toggle -- clearly clickable buttons; blue accent when active
+   (not grey), and no bold so the checked label never clips */
+QPushButton#viewToggle {
+    background-color: #3a3a3a;
+    border: 1px solid #565656;
+    border-radius: 5px;
+    padding: 5px 16px;
+    color: #d4d4d4;
+}
+QPushButton#viewToggle:hover {
+    background-color: #454545;
+    border-color: #7fb0ff;
+}
+QPushButton#viewToggle:checked {
+    background-color: #2f4a6b;
+    border: 1px solid #7fb0ff;
+    color: #eaf2ff;
+}
+QLabel#centerPath {
+    color: #8f8f8f;
+}
+
 /* Hover-only buttons */
 QToolButton[class="hoverFlat"] {
     background: transparent;
