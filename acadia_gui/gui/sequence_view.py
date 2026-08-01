@@ -41,6 +41,26 @@ def _combo(items):
     return box
 
 
+POINT_TIP = (
+    "Which sweep point to show.\n"
+    "The runtime's sweep, flattened to 1D in its defined order (0 … N-1).")
+
+REGISTERS_TIP = (
+    "Values the hardware sets in real time (a register or DSP result) --\n"
+    "not always a length. Cache-fed ones resolve automatically per point;\n"
+    "for the rest, type in a value to preview the sequence for it.")
+
+
+def _register_tip(entry):
+    """Per-row tooltip: settable vs auto-resolved."""
+    label = entry["label"]
+    if entry["settable"]:
+        return (f"{label}: set in real time, not at compile time.\n"
+                "Type in a value to preview the sequence for it.")
+    return (f"{label}: set in real time, read from the cache --\n"
+            "updates automatically per sweep point.")
+
+
 class SequenceWidget(QWidget):
     """Show the compiled pulse sequence of a data folder, with drag-box zoom."""
 
@@ -54,24 +74,12 @@ class SequenceWidget(QWidget):
         # ---- trace controls (a change needs a re-trace: the Reload button) ----
         self.point = QSpinBox()
         self.point.setRange(0, 0)
-        self.point.setToolTip(
-            "Which sweep point to show (0 … N-1).\n"
-            "The sequence is compiled once and every point shares that one\n"
-            "schedule — only the pulse data and the register cache differ.\n"
-            "A single dry run captures them all, so stepping this switches\n"
-            "instantly, with no re-tracing.")
-        self.resolve = QSpinBox()
-        self.resolve.setRange(0, 10_000_000)
-        self.resolve.setSingleStep(100)
-        self.resolve.setToolTip(
-            "Register cycles (resolve_indeterminate).\n"
-            "Some dwell/pulse lengths are set at run time from a register or\n"
-            "a DSP result, so they're unknown when the sequence is compiled\n"
-            "and are drawn cross-hatched. This many sequencer cycles is\n"
-            "assumed for any such length that can't be recovered from the\n"
-            "per-point cache, so it renders at a concrete width.\n"
-            "0 keeps them symbolic; lengths that resolve from the cache\n"
-            "ignore this.")
+        self.point.setToolTip(POINT_TIP)
+        # the Registers panel is rebuilt from the trace on every reload; these hold
+        # its live widgets by register name (spin boxes for settable lengths, labels
+        # for the auto-resolved read-outs)
+        self._reg_spins = {}
+        self._reg_labels = {}
         self.saved_qmsmt = QCheckBox("use saved qmsmt")
         self.saved_qmsmt.setChecked(True)
         self.saved_qmsmt.setToolTip(
@@ -147,12 +155,21 @@ class SequenceWidget(QWidget):
             return f
 
         trace_box = QVBoxLayout()
-        trace_box.addLayout(form(("point", self.point),
-                                 ("register cycles", self.resolve)))
+        point_label = QLabel("point")            # a QLabel so its text is hoverable
+        point_label.setToolTip(POINT_TIP)
+        trace_box.addLayout(form((point_label, self.point)))
         trace_box.addWidget(self.saved_qmsmt)
         trace_box.addWidget(self.reload_button)
         trace_group = QGroupBox("Trace")
         trace_group.setLayout(trace_box)
+
+        # per-register panel, populated by _build_registers after each trace and
+        # hidden when the runtime has no registers/register-driven lengths
+        self._reg_form = QFormLayout()
+        self.reg_group = QGroupBox("Registers")
+        self.reg_group.setLayout(self._reg_form)
+        self.reg_group.setToolTip(REGISTERS_TIP)
+        self.reg_group.setVisible(False)
 
         color_group = QGroupBox("Color && labels")   # && -> literal & (Qt mnemonic)
         color_group.setLayout(form(("color by", self.color_by),
@@ -181,7 +198,8 @@ class SequenceWidget(QWidget):
         nav_group.setLayout(nav_box)
 
         column = QVBoxLayout()
-        for group in (trace_group, color_group, env_group, marks_group, nav_group):
+        for group in (trace_group, self.reg_group, color_group, env_group,
+                      marks_group, nav_group):
             column.addWidget(group)
         column.addStretch(1)
         column_widget = QWidget()
@@ -258,7 +276,7 @@ class SequenceWidget(QWidget):
             self.trace = trace_folder(
                 self.folder,
                 point=0,
-                resolve_indeterminate=self.resolve.value(),
+                resolve_indeterminate=0,   # per-register overrides replace the blanket
                 use_saved_qmsmt=self.saved_qmsmt.isChecked())
         except Exception as exc:
             self.clear(f"Could not trace this folder: {type(exc).__name__}: {exc}")
@@ -267,6 +285,7 @@ class SequenceWidget(QWidget):
         self.point.setRange(0, max(self.trace.n_points - 1, 0))
         self.point.setValue(0)
         self.point.blockSignals(False)
+        self._build_registers()
         self._populate_blocks()
         self._redraw()
         self._set_status("")     # summary dropped; just clear the tracing message
@@ -279,6 +298,7 @@ class SequenceWidget(QWidget):
         self.canvas.figure.clear()
         self.canvas.draw_idle()
         self.jump.clear()
+        self._build_registers()   # trace is None -> hides the panel
         self._set_status(message)
 
     def set_theme(self, theme_name):
@@ -301,7 +321,71 @@ class SequenceWidget(QWidget):
         if not 0 <= index < self.trace.n_points:
             return
         self.view.set_point(index)
+        self._refresh_registers()   # cache-fed values change per point
         self._populate_blocks()
+
+    # ---------------- registers ----------------
+
+    def _build_registers(self):
+        """(Re)build the Registers panel from the current trace."""
+        while self._reg_form.rowCount():
+            self._reg_form.removeRow(0)
+        self._reg_spins, self._reg_labels = {}, {}
+        entries = self.trace.register_summary() if self.trace is not None else []
+        if not entries:
+            self.reg_group.setVisible(False)
+            return
+        for entry in entries:
+            name = entry["name"]
+            tip = _register_tip(entry)
+            name_label = QLabel(name)            # a QLabel so its text is hoverable
+            name_label.setToolTip(tip)
+            if entry["settable"]:
+                field = self._register_input(entry, tip)
+            else:
+                field = QLabel(self._register_text(entry))
+                field.setToolTip(tip)
+                self._reg_labels[name] = field
+            self._reg_form.addRow(name_label, field)
+        self.reg_group.setVisible(True)
+
+    def _register_input(self, entry, tip):
+        """Spin box (in cycles) for a settable register/DSP-driven length."""
+        name = entry["name"]
+        spin = QSpinBox()
+        spin.setRange(0, 10_000_000)
+        spin.setValue(int(self.trace.register_overrides.get(
+            name, entry["value_cycles"] or 0)))
+        spin.setToolTip(tip)
+        spin.valueChanged.connect(lambda value, n=name: self._set_register(n, value))
+        self._reg_spins[name] = spin
+        return spin
+
+    @staticmethod
+    def _register_text(entry):
+        """Read-only value of an auto-resolved register (the length itself is
+        already drawn on the sequence, so this shows only the raw value)."""
+        cycles = entry["value_cycles"]
+        return (f"{entry['source']} → {cycles}" if cycles is not None
+                else f"{entry['source']} → set per run")
+
+    def _set_register(self, name, value):
+        """Pin a register/DSP-driven length; re-lay out in place (no re-trace)."""
+        if self.trace is None:
+            return
+        self.trace.register_overrides[name] = int(value)
+        self.trace.relayout()
+        self._redraw()
+        self._refresh_registers()
+
+    def _refresh_registers(self):
+        """Update the read-outs after a point change or an override edit."""
+        if self.trace is None:
+            return
+        for entry in self.trace.register_summary():
+            name = entry["name"]
+            if name in self._reg_labels:
+                self._reg_labels[name].setText(self._register_text(entry))
 
     def _redraw(self):
         if self.trace is None:
