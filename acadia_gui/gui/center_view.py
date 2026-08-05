@@ -16,7 +16,21 @@ from PyQt5.QtWidgets import (QHBoxLayout, QLabel, QPushButton, QSizePolicy,
                              QStackedWidget, QVBoxLayout, QWidget)
 
 from .plot_view import FigureDisplayWidget
-from .sequence_view import SequenceWidget
+
+# Compatibility layer: the SeeQuence view needs acadia_qmsmt.sequence_viz, added in qmsmt
+# 1.0. Against an older installed qmsmt the module is absent, so importing SequenceWidget
+# (which imports it at module load) would break the whole browser. Probe for it first and
+# only pull the widget in when present; otherwise CenterView greys the toggle out with a
+# hover explaining why.
+try:
+    import acadia_qmsmt.sequence_viz  # noqa: F401  (presence probe)
+    from .sequence_view import SequenceWidget
+    SEQUENCE_AVAILABLE = True
+except ImportError:
+    SequenceWidget = None
+    SEQUENCE_AVAILABLE = False
+
+SEQUENCE_UNAVAILABLE_TIP = "Requires qmsmt version ≥ 1.0"
 
 LIVE, SEQUENCE = 0, 1
 
@@ -27,7 +41,9 @@ class CenterView(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.live = FigureDisplayWidget()
-        self.sequence = SequenceWidget()
+        # None when sequence_viz is unavailable -- the toggle is disabled, so the view is
+        # never shown, but guard every use of it below anyway.
+        self.sequence = SequenceWidget() if SEQUENCE_AVAILABLE else None
 
         self._folder = None
         self._is_data_folder = True
@@ -35,7 +51,8 @@ class CenterView(QWidget):
 
         self.stack = QStackedWidget()
         self.stack.insertWidget(LIVE, self.live)
-        self.stack.insertWidget(SEQUENCE, self.sequence)
+        if self.sequence is not None:
+            self.stack.insertWidget(SEQUENCE, self.sequence)
 
         # compact segmented toggle -- two adjacent checkable buttons, exclusivity
         # enforced in set_mode
@@ -48,6 +65,20 @@ class CenterView(QWidget):
         self.btn_live.clicked.connect(lambda: self.set_mode(LIVE))
         self.btn_sequence.clicked.connect(lambda: self.set_mode(SEQUENCE))
 
+        # what actually gets added to the header for the SeeQuence toggle: the bare button
+        # when available, else a greyed (disabled) button. Qt won't show a tooltip on a
+        # disabled widget, so the hover reason goes on an enabled wrapper around it.
+        self._sequence_toggle = self.btn_sequence
+        if not SEQUENCE_AVAILABLE:
+            self.btn_sequence.setEnabled(False)
+            self.btn_sequence.setToolTip(SEQUENCE_UNAVAILABLE_TIP)
+            wrapper = QWidget()
+            wrapper.setToolTip(SEQUENCE_UNAVAILABLE_TIP)
+            inner = QHBoxLayout(wrapper)
+            inner.setContentsMargins(0, 0, 0, 0)
+            inner.addWidget(self.btn_sequence)
+            self._sequence_toggle = wrapper
+
         # the selected folder's path, shown in the header and elided when too long
         self.path_label = QLabel("")
         self.path_label.setObjectName("centerPath")
@@ -59,7 +90,7 @@ class CenterView(QWidget):
         header = QHBoxLayout()
         header.setSpacing(6)                        # two distinct, clickable buttons
         header.addWidget(self.btn_live)
-        header.addWidget(self.btn_sequence)
+        header.addWidget(self._sequence_toggle)
         header.addSpacing(12)
         header.addWidget(self.path_label, 1)        # fills the row; elides when long
 
@@ -76,6 +107,8 @@ class CenterView(QWidget):
 
     def set_mode(self, index):
         """Show LIVE or SEQUENCE; trace the sequence lazily the first time it shows."""
+        if index == SEQUENCE and self.sequence is None:
+            return                        # sequence_viz unavailable; toggle is disabled
         self.btn_live.setChecked(index == LIVE)
         self.btn_sequence.setChecked(index == SEQUENCE)
         self.stack.setCurrentIndex(index)
@@ -93,13 +126,14 @@ class CenterView(QWidget):
         self._update_path_label()
         self.live.load_images(folder_path, is_data_folder=is_data_folder)
         self._sequence_dirty = True
-        if self.mode == SEQUENCE:
+        if self.mode == SEQUENCE and self.sequence is not None:
             self.sequence.load_folder(folder_path)
             self._sequence_dirty = False
 
     def clear(self):
         self.live.clear()
-        self.sequence.clear()
+        if self.sequence is not None:
+            self.sequence.clear()
         self._folder = None
         self._sequence_dirty = True
         self._full_path = ""
