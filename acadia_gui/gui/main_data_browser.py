@@ -11,8 +11,9 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QTimer, QPoint, QSize, QRect, QSettings
 
 from acadia_gui.gui import (LogViewer, InstrumentParamsViewer, YamlViewer,
-                            FigureDisplayWidget, FolderTreeWidget, is_datafolder,
+                            FolderTreeWidget, is_datafolder,
                             AppMenuBar, KwargsJsonViewer, GuiLogWindow, GuiLogHandler)
+from acadia_gui.gui.center_view import CenterView
 from acadia_gui import THEME_PATH
 from acadia_gui.utils import set_qt_scaling, load_user_config, get_qt_scaling, update_user_config
 from acadia_gui.icons import ICON_PATH, set_icon_color, icon_color_for_theme
@@ -79,15 +80,15 @@ class DataBrowser(QMainWindow):
 
         # --- Main GUI components ---
         self.folder_tree = FolderTreeWidget(root_path, self.on_folder_selected)
-        self.figure_display = FigureDisplayWidget()
+        self.center_view = CenterView()
         self.right_tabs = RightPanelTabs(client_station)
 
         # --- Right column: image + params ---
         self.right_splitter = QSplitter(Qt.Horizontal)
-        self.right_splitter.addWidget(self.figure_display)
+        self.right_splitter.addWidget(self.center_view)
         self.right_splitter.addWidget(self.right_tabs)
         # size debugging
-        # self.figure_display.setStyleSheet("border: 2px solid red;")
+        # self.center_view.setStyleSheet("border: 2px solid red;")
         # self.right_tabs.setStyleSheet("border: 2px solid green;")
         # self.right_splitter.setStyleSheet("border: 2px dashed blue;")
 
@@ -132,17 +133,17 @@ class DataBrowser(QMainWindow):
         self.move(x, y)
 
     def on_folder_selected(self, folder_path):
-        self.figure_display.clear()
+        self.center_view.clear()
         self.right_tabs.clear()
 
         if is_datafolder(folder_path):
             force_garbage_collect()
-            self.figure_display.load_images(folder_path)
+            self.center_view.load_images(folder_path)
             self.right_tabs.update_content(folder_path)
         else:
             # Not an Acadia data folder, but still render any pictures it
             # contains so plain image folders are browsable in the plot view.
-            self.figure_display.load_images(folder_path, is_data_folder=False)
+            self.center_view.load_images(folder_path, is_data_folder=False)
 
     def apply_theme(self, theme_name):
         try:
@@ -171,7 +172,7 @@ class DataBrowser(QMainWindow):
         self.folder_tree.reload_icons()
 
         # forward to central matplotlib plot
-        self.figure_display.set_theme(theme_name)
+        self.center_view.set_theme(theme_name)
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -239,6 +240,11 @@ class DataBrowser(QMainWindow):
         if right is not None:
             self.right_splitter.restoreState(right)
 
+        # --- centre view mode (Live / Sequence) ---
+        mode = s.value("center/mode")
+        if mode is not None:
+            self.center_view.set_mode(int(mode))
+
         # restoreState() restores each pane's individual collapsible flag from
         # whatever was saved previously (which overrides childrenCollapsible),
         # so re-assert non-collapsible per pane here rather than at construction.
@@ -271,6 +277,7 @@ class DataBrowser(QMainWindow):
         s.setValue("splitters/outer", self.outer_splitter.saveState())
         s.setValue("splitters/main", self.main_splitter.saveState())
         s.setValue("splitters/right", self.right_splitter.saveState())
+        s.setValue("center/mode", self.center_view.mode)
 
         s.setValue("log/geometry", self.log_window.saveGeometry())
         s.setValue("log/visible", self.log_window.isVisible())
