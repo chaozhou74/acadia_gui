@@ -143,7 +143,13 @@ class FolderMonitorWorker(QObject):
         self._dir_cursor = 0
         self.known_datafolders = set()
 
-        self._index_full_branch(self.root_path, emit=False)  # build initial dir state
+        # NOT indexed here. __init__ runs on whatever thread CONSTRUCTS the worker, and this
+        # one is constructed on the GUI thread and only then moveToThread'd -- so building the
+        # initial index here walked the whole data root synchronously in front of the user.
+        # Measured: 74,274 directories over NFS, 105 s of frozen window at startup, every time,
+        # because `auto_jump_to_newest` starts the monitor from FolderTreeWidget.__init__.
+        # run() executes on the worker thread, so the walk belongs there.
+        self._indexed = False
 
     def _index_full_branch(self, path, emit=False):
         """
@@ -229,6 +235,11 @@ class FolderMonitorWorker(QObject):
 
     def run(self):
         try:
+            if not self._indexed:
+                # The initial index, on the WORKER thread. emit=False: folders that already
+                # exist are the baseline, not new arrivals.
+                self._index_full_branch(self.root_path, emit=False)
+                self._indexed = True
             while not self._stop_event.is_set():
                 self._scan_changed_dirs()
                 time.sleep(self.poll_interval)
@@ -813,13 +824,45 @@ class FolderTreeWidget(QWidget):
         self.jump_to_current_match()
 
     def find_folders_matching(self, pattern: str):
+        """Folders under the root whose NAME contains `pattern`.
+
+        Two things make this cheaper than the os.walk it replaces, and the second also makes it
+        more correct:
+
+        * one `scandir` per directory answers both "what are the subdirectories" and "is this a
+          data folder", where `os.walk` plus a separate `isfile` needs two round trips;
+        * a data folder's children are pruned. The tree already refuses to expand a data folder
+          (`DataFolderModel.hasChildren`), so a match inside one could never be navigated to --
+          the old code walked 74,275 directories to offer matches that `jump_to_current_match`
+          cannot reach, against 53,013 now.
+
+        Measured on a 74k-directory NFS root: 55.6 s before, 39.1 s now. Still slow, and still
+        on the GUI thread -- the cost is NFS round trips and it does NOT parallelise (measured
+        flat from 1 to 64 threads), so the only way to stop the freeze is to move the search to
+        a worker thread the way FolderMonitorWorker does.
+        """
         matches = []
         pattern_lower = pattern.lower()
-
-        for dirpath, dirnames, _ in os.walk(self.root_path):
-            if pattern_lower in os.path.basename(dirpath).lower():
-                matches.append(dirpath)
-
+        stack = [self.root_path]
+        while stack:
+            path = stack.pop()
+            if pattern_lower in os.path.basename(path).lower():
+                matches.append(path)
+            subdirs, is_data = [], False
+            try:
+                with os.scandir(path) as it:
+                    for entry in it:
+                        try:
+                            if entry.is_dir(follow_symlinks=False):
+                                subdirs.append(entry.path)
+                            elif entry.name == DATAFOLDER_INDICATOR_FILE:
+                                is_data = True
+                        except OSError:            # a vanished entry mid-scan
+                            continue
+            except OSError:                        # unreadable directory
+                continue
+            if not is_data:
+                stack.extend(subdirs)
         return matches
 
     def jump_to_current_match(self):
