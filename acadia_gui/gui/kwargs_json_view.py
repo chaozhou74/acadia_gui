@@ -44,13 +44,13 @@ class KwargsJsonViewer(QWidget):
             self.tree.addTopLevelItem(QTreeWidgetItem(["Error", f"{KWARGS_JSON_FILE} not found"]))
             return
 
-        with open(self.json_path, "r") as f:
-            try:
+        try:
+            with open(self.json_path, "r") as f:
                 data = json.load(f)
-                data = Runtime._untransform_arg(data)
-                self._populate_tree(data)
-            except Exception as e:
-                self.tree.addTopLevelItem(QTreeWidgetItem(["Error", str(e)]))
+            data = Runtime._untransform_arg(data)
+            self._populate_tree(data)
+        except Exception as e:      # unreadable / vanished between the exists() check and open()
+            self.tree.addTopLevelItem(QTreeWidgetItem(["Error", str(e)]))
 
     def _populate_tree(self, obj, parent=None):
         """Recursively populate the tree with dictionary/list items."""

@@ -150,16 +150,7 @@ QComboBox#kwarg_combo_box {
     padding: 2px;
 }
 
-QComboBox#kwarg_combo_box:drop-down {
-    border: none;
-    background: transparent;
-}
-
-QComboBox#kwarg_combo_box:down-arrow {
-    image: none;
-    width: 0;
-    height: 0;
-}
+/* (the drop-down arrow is intentionally left visible so dropdowns read as dropdowns) */
 
 /* ========== HOVER-ONLY TOOL BUTTONS ========== */
 QToolButton[class="hoverFlat"] {

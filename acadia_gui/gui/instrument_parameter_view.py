@@ -4,7 +4,7 @@ import logging
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QTreeWidget, QTreeWidgetItem,
-    QCheckBox, QPushButton, QLabel
+    QCheckBox, QPushButton, QLabel, QApplication
 )
 
 logger = logging.getLogger(__name__)
@@ -70,11 +70,15 @@ class InstrumentParamsViewer(QWidget):
         self.load_button.setEnabled(self.client_station is not None)
 
         self.inst_data = load_inst_params(folder_path)
-        if not self.inst_data:
+        if not self.inst_data or not isinstance(self.inst_data, dict) or set(self.inst_data) == {"error"}:
+            message = "inst_params.json not found"
+            if isinstance(self.inst_data, dict) and "error" in self.inst_data:
+                message = f"Could not read inst_params.json:\n{self.inst_data['error']}"
+            self.inst_data = None
             self.tree.hide()
             self.select_all_checkbox.hide()
             self.load_button.setEnabled(False)
-            self.notice_label.setText("inst_params.json not found")
+            self.notice_label.setText(message)
             self.notice_label.show()
             return
 
@@ -118,12 +122,29 @@ class InstrumentParamsViewer(QWidget):
     def load_selected_parameters(self):
         if not self.inst_data:
             return
+        if self.client_station is None:
+            return
         dd = {k: v for k, v in self.inst_data.items() if k in self.selected_instruments}
-        logger.info("!!! Loading parameters to instruments:", dd)
-        self.client_station.set_parameters(dd)
+        if not dd:
+            logger.warning("No instruments selected; nothing loaded.")
+            return
+        logger.info(f"!!! Loading parameters to instruments: {sorted(dd)}")
+        # Synchronous on purpose: the instrument client talks ZMQ, whose sockets must not be used
+        # from another thread. Busy cursor + no crash on failure.
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        self.load_button.setEnabled(False)
+        try:
+            self.client_station.set_parameters(dd)
+            logger.info(f"Loaded parameters to instruments: {sorted(dd)}")
+        except Exception as e:
+            logger.error(f"Failed to load parameters to instruments: {e}", exc_info=True)
+        finally:
+            self.load_button.setEnabled(True)
+            QApplication.restoreOverrideCursor()
 
     def clear(self):
         self.tree.clear()
         self.selected_instruments.clear()
         self.notice_label.hide()
         self.load_button.hide()
+        self.select_all_checkbox.hide()

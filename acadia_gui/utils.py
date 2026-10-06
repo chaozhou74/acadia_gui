@@ -266,9 +266,12 @@ def load_user_config():
     return {}
 
 def save_user_config(config):
+    # write-then-rename so a crash/kill mid-write can never leave a truncated (empty) config
+    tmp_path = CONFIG_PATH.with_name(CONFIG_PATH.name + ".tmp")
     try:
-        with open(CONFIG_PATH, "w") as f:
+        with open(tmp_path, "w") as f:
             json.dump(config, f, indent=2)
+        os.replace(tmp_path, CONFIG_PATH)
     except Exception as e:
         logger.warning(f"Could not write user config ({CONFIG_PATH}): {e}")
 

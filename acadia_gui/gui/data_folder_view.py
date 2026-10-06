@@ -3,17 +3,17 @@ import subprocess
 import shutil
 from functools import wraps
 import logging
-from threading import Event
 import time
 from PyQt5.QtWidgets import (QWidget, QFileSystemModel, QTreeView, QVBoxLayout, QSizePolicy, QLineEdit, QLabel,
                              QPushButton, QFileDialog, QMenu, QApplication, QHBoxLayout, QMessageBox)
-from PyQt5.QtCore import Qt, QModelIndex, QDir, QUrl, QSortFilterProxyModel, QObject, pyqtSignal, QThread, QTimer
+from PyQt5.QtCore import Qt, QModelIndex, QDir, QUrl, QSortFilterProxyModel, QThread, QTimer
 from PyQt5.QtGui import QIcon, QDesktopServices, QColor, QBrush
 
 
 from acadia_qmsmt.utils.path_adapter import detect_platform, to_windows_path
 from acadia_gui.icons import get_icon
 from acadia_gui.utils import load_user_config, update_user_config
+from acadia_gui.gui.folder_index import FolderIndexWorker
 
 
 TRASH_FOLDER_NAME = "Trash"
@@ -36,16 +36,34 @@ class DataFolderModel(QFileSystemModel):
         if self.trash_icon.isNull():
             # fallback to a local icon
             self.trash_icon = get_icon("trash_bin.svg")
+        # data()/hasChildren() run for every visible row on every repaint (hover, scroll, select).
+        # Uncached, each was an NFS stat of <row>/run.py on the GUI thread. Cache the answer
+        # briefly; a folder that has just become a data folder updates within the TTL.
+        self._datafolder_cache = {}
 
+    DATAFOLDER_CACHE_TTL_S = 5.0
+
+    def is_datafolder_cached(self, path):
+        now = time.monotonic()
+        hit = self._datafolder_cache.get(path)
+        if hit is not None and now - hit[1] < self.DATAFOLDER_CACHE_TTL_S:
+            return hit[0]
+        result = is_datafolder(path)
+        if len(self._datafolder_cache) > 20000:
+            self._datafolder_cache.clear()
+        self._datafolder_cache[path] = (result, now)
+        return result
 
     def data(self, index: QModelIndex, role: int = Qt.DisplayRole):
+        if role not in (Qt.DecorationRole, Qt.ForegroundRole) or index.column() != 0:
+            return super().data(index, role)
         path = self.filePath(index)
         base_name = os.path.basename(path)
 
         if role == Qt.DecorationRole and index.column() == 0:
             if base_name == TRASH_FOLDER_NAME:
                 return self.trash_icon
-            if is_datafolder(path):
+            if self.is_datafolder_cached(path):
                 return self.datafolder_icon
 
         if role == Qt.ForegroundRole and index.column() == 0:
@@ -56,7 +74,7 @@ class DataFolderModel(QFileSystemModel):
 
     def hasChildren(self, index: QModelIndex):
         path = self.filePath(index)
-        if is_datafolder(path):
+        if path and self.is_datafolder_cached(path):
             return False  # Don't show expand arrow
         return super().hasChildren(index)
 
@@ -109,191 +127,6 @@ def update_explorer_after_trash(func):
 
 
 
-class FolderMonitorWorker(QObject):
-    new_datafolder_found = pyqtSignal(str)
-    finished = pyqtSignal()
-
-    def __init__(self, root_path, poll_interval=0.3, stat_batch=4000):
-        """
-        Polling monitor for new data folders.
-
-        We are not using the Qt built-in monitor because it uses lazy loading,
-        but we do want to monitor nested fooder changes as well.
-
-        How this works:
-        - Keep a list of known directories and their mtimes.
-        - On each tick, stat a round-robin batch.
-        - If a dir’s mtime changed, we fully walk that branch:
-            - If we see a datafolder, emit once and prune its children.
-            - Otherwise, add any new subdirs to tracking.
-
-        :param root_path: root directory to monitor
-        :param poll_interval: interval between scans, in seconds
-        :param stat_batch: how many dirs to stat per tick
-        """
-        super().__init__()
-        self.root_path = os.path.abspath(root_path)
-        self.poll_interval = poll_interval
-        self.stat_batch = stat_batch
-        self._stop_event = Event()
-
-        # Tracking
-        self.dir_state = {}        # path -> {"mtime": float, "last_scan": float}
-        self._dir_keys = []        # round-robin list of dirs to stat each tick
-        self._dir_cursor = 0
-        self.known_datafolders = set()
-
-        # NOT indexed here. __init__ runs on whatever thread CONSTRUCTS the worker, and this
-        # one is constructed on the GUI thread and only then moveToThread'd -- so building the
-        # initial index here walked the whole data root synchronously in front of the user.
-        # Measured: 74,274 directories over NFS, 105 s of frozen window at startup, every time,
-        # because `auto_jump_to_newest` starts the monitor from FolderTreeWidget.__init__.
-        # run() executes on the worker thread, so the walk belongs there.
-        self._indexed = False
-
-    def _index_full_branch(self, path, emit=False):
-        """
-        Stat a batch of dirs. If a dir changed, re-walk that branch (emit=True).
-        """
-        logger.debug(f"Inspecting existing data folders under {path}...")
-        for dirpath, dirnames, _ in os.walk(path, topdown=True):
-            if self._stop_event.is_set():
-                dirnames[:] = []  # prune children
-                break  # stop walking this branch
-
-            # Skip Trash folders entirely
-            if os.path.basename(dirpath) == TRASH_FOLDER_NAME:
-                dirnames[:] = []  # prune children
-                continue
-
-            # If we already know it's a datafolder, prune subtree
-            if dirpath in self.known_datafolders:
-                dirnames[:] = []
-                continue
-
-            if is_datafolder(dirpath):
-                if dirpath not in self.known_datafolders:
-                    self.known_datafolders.add(dirpath)
-                    if emit:
-                        self.new_datafolder_found.emit(dirpath)
-                dirnames[:] = []  # prune children of a datafolder
-                continue
-
-            # Track this directory
-            try:
-                st = os.stat(dirpath, follow_symlinks=False)
-            except (FileNotFoundError, PermissionError):
-                dirnames[:] = []
-                continue
-
-            if dirpath not in self.dir_state:
-                self.dir_state[dirpath] = {"mtime": st.st_mtime, "last_scan": 0.0}
-                self._dir_keys.append(dirpath)
-            else:
-                # keep mtime fresh if we walked due to a parent change
-                self.dir_state[dirpath]["mtime"] = st.st_mtime
-        logger.debug(f"Done inspecting data folders under {path}.")
-
-    def _scan_changed_dirs(self):
-        """
-        Round-robin stat a batch. For any dir whose mtime changed,
-        walk the FULL branch rooted at that dir (emit=True).
-        """
-        if not self._dir_keys:
-            return
-
-        n = len(self._dir_keys)
-        end = self._dir_cursor + min(self.stat_batch, n)
-        i = self._dir_cursor
-
-        while i < end and not self._stop_event.is_set():
-            d = self._dir_keys[i % n]
-            st = self.dir_state.get(d)
-            if st is None:
-                i += 1
-                continue
-
-            try:
-                s = os.stat(d, follow_symlinks=False)
-                if st["mtime"] != s.st_mtime:
-                    # parent changed -> fully (re)index the branch and emit any new datafolders
-                    st["mtime"] = s.st_mtime
-                    self._index_full_branch(d, emit=True)
-                st["last_scan"] = time.time()
-            except (FileNotFoundError, PermissionError):
-                # dropped; remove from state (lazy compact of _dir_keys later)
-                self.dir_state.pop(d, None)
-
-            i += 1
-
-        self._dir_cursor = (i % max(1, n))
-
-        # Light compaction of _dir_keys if many paths were removed
-        if len(self._dir_keys) > max(1, int(len(self.dir_state) * 1.2)):
-            self._dir_keys = [k for k in self._dir_keys if k in self.dir_state]
-            self._dir_cursor = (self._dir_cursor % len(self._dir_keys)) if self._dir_keys else 0
-
-    def run(self):
-        try:
-            if not self._indexed:
-                # The initial index, on the WORKER thread. emit=False: folders that already
-                # exist are the baseline, not new arrivals.
-                self._index_full_branch(self.root_path, emit=False)
-                self._indexed = True
-            while not self._stop_event.is_set():
-                self._scan_changed_dirs()
-                time.sleep(self.poll_interval)
-        finally:
-            self.finished.emit()
-
-    def stop(self):
-        self._stop_event.set()
-
-
-
-# class FolderMonitorWorker(QObject):
-#     new_datafolder_found = pyqtSignal(str)
-#     finished = pyqtSignal()
-#
-#     def __init__(self, root_path, poll_interval=0.5):
-#         super().__init__()
-#         self.root_path = os.path.abspath(root_path)
-#         self.poll_interval = poll_interval
-#         self._stop_event = Event()
-#         self.known_datafolders = set()
-#         self._inspect_current_folders()
-#
-#     def _inspect_current_folders(self):
-#         logger.info("Inspecting existing data folders...")
-#         for dirpath, dirnames, _ in os.walk(self.root_path, topdown=True):
-#             if is_datafolder(dirpath):
-#                 self.known_datafolders.add(dirpath)
-#                 # prune: no need to visit children of a datafolder
-#                 dirnames[:] = []
-#         logger.info("Done inspecting existing data folders.")
-#
-#     def stop(self):
-#         self._stop_event.set()
-#
-#     def run(self):
-#         try:
-#             while not self._stop_event.is_set():
-#                 for dirpath, dirnames, _ in os.walk(self.root_path, topdown=True):
-#                     # prune entire subtree if we already know it's a datafolder
-#                     if dirpath in self.known_datafolders:
-#                         dirnames[:] = []
-#                         continue
-#
-#                     if is_datafolder(dirpath):
-#                         self.known_datafolders.add(dirpath)
-#                         self.new_datafolder_found.emit(dirpath)
-#                         dirnames[:] = []  # prune newly found subtree
-#                 time.sleep(self.poll_interval)
-#         finally:
-#             self.finished.emit()
-#
-
-
 class CustomTreeView(QTreeView):
     def __init__(self, parent_widget):
         """
@@ -310,6 +143,20 @@ class CustomTreeView(QTreeView):
             self.folder_widget.go_forward()
             return
         super().mousePressEvent(event)
+
+    NAV_KEYS = (Qt.Key_Up, Qt.Key_Down, Qt.Key_PageUp, Qt.Key_PageDown, Qt.Key_Home, Qt.Key_End)
+
+    def keyPressEvent(self, event):
+        """Keyboard navigation loads the folder too (it used to need a mouse click).
+
+        Arrow/page keys load after a short pause, so holding a key down doesn't load every folder
+        it passes; Enter/Return loads immediately.
+        """
+        super().keyPressEvent(event)
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+            self.folder_widget.load_current_index()
+        elif event.key() in self.NAV_KEYS:
+            self.folder_widget.schedule_load_current_index()
 
 
 class FolderTreeWidget(QWidget):
@@ -434,10 +281,25 @@ class FolderTreeWidget(QWidget):
         self.search_match_index = -1
         self.last_expanded_path = None
 
-        # most recent folder monitoring
-        self.monitor_worker = None
-        self.monitor_thread = None
-        self.destroyed.connect(self.stop_monitoring)
+        # background folder index (auto-jump, search, most recent) -- see folder_index.py
+        self.index_worker = None
+        self.index_thread = None
+        self._index_ready_seen = False
+        self._pending_most_recent = False
+
+        # auto-jump: one pending (cancellable) jump, 1 s after a new folder appears
+        self._pending_jump_path = None
+        self._jump_timer = QTimer(self)
+        self._jump_timer.setSingleShot(True)
+        self._jump_timer.setInterval(1000)
+        self._jump_timer.timeout.connect(self._do_pending_jump)
+
+        # keyboard navigation: load the folder the cursor rests on
+        self._last_loaded_path = None
+        self._key_load_timer = QTimer(self)
+        self._key_load_timer.setSingleShot(True)
+        self._key_load_timer.setInterval(150)
+        self._key_load_timer.timeout.connect(self.load_current_index)
 
         # restore the persisted auto-jump-to-newest preference
         if load_user_config().get("auto_jump_to_newest"):
@@ -484,6 +346,7 @@ class FolderTreeWidget(QWidget):
             self._update_history(path)
 
         if trigger_callback:
+            self._last_loaded_path = path
             self.on_select_callback(path)
         return True
 
@@ -497,9 +360,21 @@ class FolderTreeWidget(QWidget):
 
     def folder_selected(self, index: QModelIndex):
         path = self.source_path_from_proxy_index(index)
+        if not path:
+            return
         if is_datafolder(path):
             self._update_history(path)
+        self._last_loaded_path = path
         self.on_select_callback(path)
+
+    def schedule_load_current_index(self):
+        self._key_load_timer.start()
+
+    def load_current_index(self):
+        self._key_load_timer.stop()
+        index = self.tree.currentIndex()
+        if index.isValid() and self.source_path_from_proxy_index(index) != self._last_loaded_path:
+            self.folder_selected(index)
 
     def select_new_root(self):
         options = QFileDialog.Options()
@@ -508,12 +383,15 @@ class FolderTreeWidget(QWidget):
         self.set_root_path(new_root)
 
     def set_root_path(self, root_path):
-        if os.path.isdir(root_path):
+        if root_path and os.path.isdir(root_path):
             # If monitoring, stop first
             was_enabled = self.recent_lock_enabled
 
-            # stop current monitoring but DO NOT flip the flag
-            self._pause_monitoring()
+            # stop the index of the old root (and any pending jump) but DO NOT flip the flag
+            self._jump_timer.stop()
+            self._pending_most_recent = False
+            self.stop_index()
+            self.clear_search_filter()
 
             self.model.setRootPath(root_path)
             self.tree.setRootIndex(self.proxy_model.mapFromSource(self.model.index(root_path)))
@@ -530,6 +408,8 @@ class FolderTreeWidget(QWidget):
             if was_enabled:
                 self.start_monitoring()  # will respect recent_lock_enabled
             self._set_recent_lock_ui()
+        elif root_path:
+            logger.warning(f"Not a directory: {root_path}")
 
     def collapse_peer_folders(self, path):
         """
@@ -630,35 +510,31 @@ class FolderTreeWidget(QWidget):
     def handle_trash(self, path):
         parent_dir = os.path.dirname(path)
         trash_dir = os.path.join(parent_dir, TRASH_FOLDER_NAME)
-        os.makedirs(trash_dir, exist_ok=True)
+
+        # --- choose the folder to select afterwards BEFORE moving (the index dies with the move) ---
+        next_path = parent_dir
+        trashed_proxy = self.path_to_proxy_index(path)
+        if trashed_proxy.isValid():
+            parent_proxy = trashed_proxy.parent()
+            rows = self.proxy_model.rowCount(parent_proxy)
+            for row in (trashed_proxy.row() + 1, trashed_proxy.row() - 1):   # next, else previous
+                if 0 <= row < rows:
+                    candidate = self.source_path_from_proxy_index(self.proxy_model.index(row, 0, parent_proxy))
+                    if candidate and os.path.basename(candidate) != TRASH_FOLDER_NAME:
+                        next_path = candidate
+                        break
+
         try:
+            os.makedirs(trash_dir, exist_ok=True)
             target = _unique_trash_path(trash_dir, os.path.basename(path))
             shutil.move(path, target)
             logger.info(f"Moved {path} to {trash_dir}")
         except Exception as e:
             logger.error(f"Failed to move {path} to trash: {e}", exc_info=True)
+            return
 
-        # --- auto-select next index in the same parent ---
-        trashed_proxy = self.path_to_proxy_index(path)
-        parent_proxy = trashed_proxy.parent()
-
-        # Try next sibling row
-        next_row = trashed_proxy.row() + 1
-        if next_row >= self.proxy_model.rowCount(parent_proxy):
-            # No next sibling → try previous sibling
-            next_row = trashed_proxy.row() - 1
-
-        if 0 <= next_row < self.proxy_model.rowCount(parent_proxy):
-            next_proxy = self.proxy_model.index(next_row, 0, parent_proxy)
-        else:
-            # No siblings → select parent
-            next_proxy = parent_proxy
-
-        if next_proxy.isValid():
-            self.tree.setCurrentIndex(next_proxy)
-            self.tree.scrollTo(next_proxy)
-            self._update_history(self.source_path_from_proxy_index(next_proxy))
-            self.on_select_callback(self.source_path_from_proxy_index(next_proxy))
+        if next_path and os.path.isdir(next_path):
+            self.focus_path(next_path, update_history=is_datafolder(next_path))
 
     @update_explorer_after_trash
     def handle_restore(self, path):
@@ -706,46 +582,24 @@ class FolderTreeWidget(QWidget):
                 logger.error(f"Failed to delete trash folder {path}: {e}", exc_info=True)
 
     def select_most_recent_folder(self):
-        root_path = self.model.rootPath()
-        most_recent_path = None
-        latest_mtime = -1.0
-        logger.debug(f"Scanning for most recent data folder under {root_path}...")
+        """Jump to the newest data folder under the root.
 
-        stack = [root_path]
-        while stack:
-            current_dir = stack.pop()
-            try:
-                with os.scandir(current_dir) as it:
-                    for entry in it:
-                        if not entry.is_dir(follow_symlinks=False):
-                            continue
-
-                        dirpath = entry.path
-                        # Skip Trash folders entirely
-                        if os.path.basename(dirpath) == TRASH_FOLDER_NAME:
-                            continue
-
-                        # Check if this is a data folder
-                        run_py = os.path.join(dirpath, DATAFOLDER_INDICATOR_FILE)
-                        if os.path.isfile(run_py):
-                            try:
-                                mtime = os.stat(run_py, follow_symlinks=False).st_mtime
-                            except (FileNotFoundError, PermissionError):
-                                continue
-                            if mtime > latest_mtime:
-                                latest_mtime = mtime
-                                most_recent_path = dirpath
-                            # prune children of a datafolder
-                            continue
-
-                        # Not a datafolder → add to stack for further scanning
-                        stack.append(dirpath)
-            except (FileNotFoundError, PermissionError):
-                continue
-
-        if most_recent_path:
-            self.focus_path(most_recent_path)
-
+        Answered from the background index (instant once it is built). Before that, the jump
+        happens as soon as indexing completes; the window stays responsive meanwhile. (This used
+        to walk the whole tree on the GUI thread: 45 s frozen on a 27k-folder NFS root.)
+        """
+        worker = self.ensure_index()
+        if worker.walk_done:
+            self._pending_most_recent = False
+            newest = worker.newest_datafolder()
+            if newest:
+                self.focus_path(newest)
+            else:
+                logger.info(f"No data folders found under {self.root_path}")
+        else:
+            self._pending_most_recent = True
+            self.recent_button.setToolTip("Finding the newest data folder (indexing)...")
+            logger.info("Indexing the data folders; will jump to the newest one when done.")
 
     def sort_by_mtime(self):
         self.tree.sortByColumn(3, self.current_sort_order)
@@ -808,62 +662,40 @@ class FolderTreeWidget(QWidget):
             return
 
         # text changed, redo search
-        self.search_matches = self.find_folders_matching(text)
         self.search_text = text
+        self.search_matches = self.find_folders_matching(text)
+        self.search_match_index = -1
+        self._show_search_results(jump=True)
+
+    def _show_search_results(self, jump):
+        """Update the match label (and jump to the first match) for the current search."""
+        indexing = self.index_worker is not None and not self.index_worker.walk_done
+        suffix = "+ (searching...)" if indexing else ""
         count = len(self.search_matches)
         if count == 0:
-            self.match_label.setText("0/0")
-            self.match_label.setStyleSheet("color: #ff5555; padding-left: 2px; padding-right: 2px;")
+            self.match_label.setText("0" + suffix if indexing else "0/0")
+            color = "gray" if indexing else "#ff5555"
+            self.match_label.setStyleSheet(f"color: {color}; padding-left: 2px; padding-right: 2px;")
             self.match_label.setVisible(True)
             return
-
-        self.search_match_index = 0
-        self.match_label.setText(f"1/{count}")
+        if self.search_match_index < 0:
+            self.search_match_index = 0
+        self.match_label.setText(f"{self.search_match_index + 1}/{count}{suffix}")
         self.match_label.setStyleSheet("color: gray; padding-left: 2px; padding-right: 2px;")
         self.match_label.setVisible(True)
-        self.jump_to_current_match()
+        if jump:
+            self.jump_to_current_match()
 
     def find_folders_matching(self, pattern: str):
-        """Folders under the root whose NAME contains `pattern`.
+        """Folders under the root whose NAME contains `pattern`, newest first.
 
-        Two things make this cheaper than the os.walk it replaces, and the second also makes it
-        more correct:
-
-        * one `scandir` per directory answers both "what are the subdirectories" and "is this a
-          data folder", where `os.walk` plus a separate `isfile` needs two round trips;
-        * a data folder's children are pruned. The tree already refuses to expand a data folder
-          (`DataFolderModel.hasChildren`), so a match inside one could never be navigated to --
-          the old code walked 74,275 directories to offer matches that `jump_to_current_match`
-          cannot reach, against 53,013 now.
-
-        Measured on a 74k-directory NFS root: 55.6 s before, 39.1 s now. Still slow, and still
-        on the GUI thread -- the cost is NFS round trips and it does NOT parallelise (measured
-        flat from 1 to 64 threads), so the only way to stop the freeze is to move the search to
-        a worker thread the way FolderMonitorWorker does.
+        Answered from the background index: instant, never blocks the GUI. While the index is
+        still being built the matches found so far are returned, and the result refreshes itself
+        when indexing completes. (The old version walked the whole tree on the GUI thread: 59 s
+        frozen on a 27k-folder NFS root.) Folders inside data folders are not indexed -- the tree
+        cannot expand a data folder, so such a match could never be navigated to anyway.
         """
-        matches = []
-        pattern_lower = pattern.lower()
-        stack = [self.root_path]
-        while stack:
-            path = stack.pop()
-            if pattern_lower in os.path.basename(path).lower():
-                matches.append(path)
-            subdirs, is_data = [], False
-            try:
-                with os.scandir(path) as it:
-                    for entry in it:
-                        try:
-                            if entry.is_dir(follow_symlinks=False):
-                                subdirs.append(entry.path)
-                            elif entry.name == DATAFOLDER_INDICATOR_FILE:
-                                is_data = True
-                        except OSError:            # a vanished entry mid-scan
-                            continue
-            except OSError:                        # unreadable directory
-                continue
-            if not is_data:
-                stack.extend(subdirs)
-        return matches
+        return self.ensure_index().search(pattern)
 
     def jump_to_current_match(self):
         if 0 <= self.search_match_index < len(self.search_matches):
@@ -940,70 +772,106 @@ class FolderTreeWidget(QWidget):
             # close, so saving there would wipe the preference every exit)
             update_user_config(auto_jump_to_newest=self.recent_lock_enabled)
 
-    def start_monitoring(self):
-        self.recent_lock_enabled = True
-        # don’t start twice
-        if self.monitor_thread is not None and self.monitor_thread.isRunning():
-            self._set_recent_lock_ui()
-            return
-
-        # clear stale thread if present
-        if self.monitor_thread is not None and not self.monitor_thread.isRunning():
-            self.monitor_thread.deleteLater()
-            self.monitor_thread = None
-
-        thread = QThread(self)
-        worker = FolderMonitorWorker(self.root_path)
-
+    # ---------- background index lifecycle ----------
+    def ensure_index(self) -> FolderIndexWorker:
+        """Start the background folder index for the current root if it isn't running."""
+        if self.index_worker is not None and self.index_thread is not None and self.index_thread.isRunning():
+            return self.index_worker
+        self.stop_index()
+        # No QObject parent: if the thread is ever still running when the widget is destroyed, a
+        # parented QThread would be deleted with it -> "QThread: Destroyed while thread is still
+        # running" -> abort. Lifetime is managed explicitly (stop_index / shutdown).
+        thread = QThread()
+        worker = FolderIndexWorker(self.root_path, fast=self.recent_lock_enabled)
         worker.moveToThread(thread)
-
         thread.started.connect(worker.run)
         worker.new_datafolder_found.connect(self.handle_new_datafolder)
+        worker.progress.connect(self._on_index_progress)
         worker.finished.connect(thread.quit)
-        worker.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
+        self.index_thread, self.index_worker = thread, worker
+        self._index_ready_seen = False
+        _live_index_threads.add((thread, worker))
+        thread.finished.connect(lambda t=thread, w=worker: _live_index_threads.discard((t, w)))
+        thread.start(QThread.LowPriority)
+        return worker
 
-        def _clear_refs(t=thread):
-            # only clear if THIS thread is still the active one
-            if self.monitor_thread is t:
-                self.monitor_worker = None
-                self.monitor_thread = None
-                self._set_recent_lock_ui()
+    def stop_index(self, timeout_ms=3000):
+        """Stop the index thread; waits at most `timeout_ms` (a stat stuck on a dead NFS server
+        cannot hang the GUI -- the thread is then left to finish on its own)."""
+        worker, thread = self.index_worker, self.index_thread
+        self.index_worker = self.index_thread = None
+        if worker is not None:
+            worker.stop()
+        if thread is not None:
+            thread.quit()
+            if not thread.wait(timeout_ms):
+                logger.warning("Folder index thread did not stop in time (slow file server?)")
 
-        thread.finished.connect(_clear_refs)
+    def _on_index_progress(self, n_dirs, done):
+        if self.sender() is not self.index_worker:
+            return          # a stopped index of a previous root
+        if done and not self._index_ready_seen:
+            self._index_ready_seen = True
+            n_d, n_df = self.index_worker.counts()
+            logger.info(f"Indexed {n_df} data folders in {n_d} folders under {self.root_path}")
+            self.recent_button.setToolTip("Select most recent data folder.\nRight-click to toggle auto-jump.")
+            if self._pending_most_recent:
+                self._pending_most_recent = False
+                self.select_most_recent_folder()
+        if self.search_text:   # refresh a search that ran while the index was being built
+            self.search_matches = self.ensure_index().search(self.search_text)
+            self._show_search_results(jump=self.search_match_index < 0 and bool(self.search_matches))
 
-        self.monitor_thread = thread
-        self.monitor_worker = worker
-
-        thread.start()
+    def start_monitoring(self):
+        """User intent: auto-jump to newly created data folders."""
+        self.recent_lock_enabled = True
+        self.ensure_index().fast = True
         self._set_recent_lock_ui()
 
     def _pause_monitoring(self):
-        """Internal: stop threads without changing recent_lock_enabled."""
-        if self.monitor_worker is not None:
-            self.monitor_worker.stop()
-        if self.monitor_thread is not None:
-            self.monitor_thread.quit()
-            self.monitor_thread.wait()
-        self.monitor_worker = None
-        self.monitor_thread = None
+        """Internal: stop jumping without changing recent_lock_enabled."""
+        self._jump_timer.stop()
+        self._pending_jump_path = None
+        if self.index_worker is not None:
+            self.index_worker.fast = False
 
     def stop_monitoring(self):
-        """User intent: fully disable auto-jump."""
+        """User intent: fully disable auto-jump (the index keeps serving search/most recent)."""
         self.recent_lock_enabled = False
         self._pause_monitoring()
         self._set_recent_lock_ui()
 
     def handle_new_datafolder(self, new_path: str):
-        # Jump to most recent if toggle is ON
+        if self.sender() is not None and self.sender() is not self.index_worker:
+            return          # from a stopped index of a previous root
+        # Jump to most recent if toggle is ON, 1 s later to let files populate. A newer folder
+        # arriving meanwhile replaces the pending one; turning the lock off cancels it.
         if self.recent_lock_enabled:
-            # schedule after 1 second (1000 ms) to let files populate
-            # todo: maybe instead triggering with a single when first plot update happens?
-            QTimer.singleShot(1000, lambda: self.focus_path(new_path))
+            self._pending_jump_path = new_path
+            self._jump_timer.start()
+
+    def _do_pending_jump(self):
+        path, self._pending_jump_path = self._pending_jump_path, None
+        if path and self.recent_lock_enabled and os.path.isdir(path):
+            self.focus_path(path)
+
+    def shutdown(self):
+        """Stop all background work; called when the main window closes."""
+        self._jump_timer.stop()
+        self._key_load_timer.stop()
+        self.stop_index()
 
     def closeEvent(self, e):
-        self.stop_monitoring()
+        self.shutdown()
         super().closeEvent(e)
+
+
+# index threads that may still be running (e.g. stuck on a dead NFS server at exit)
+_live_index_threads = set()
+
+
+def index_threads_running() -> bool:
+    return any(t.isRunning() for t, _ in list(_live_index_threads))
 
 
 def _unique_trash_path(trash_dir, base_name):

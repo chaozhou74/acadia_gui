@@ -17,6 +17,8 @@ from acadia_gui.gui.center_view import CenterView
 from acadia_gui import THEME_PATH
 from acadia_gui.utils import set_qt_scaling, load_user_config, get_qt_scaling, update_user_config
 from acadia_gui.icons import ICON_PATH, set_icon_color, icon_color_for_theme
+from acadia_gui.safety import (install_excepthook, use_local_pycache, UiStallWatchdog,
+                               warm_up_imports_in_background)
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +67,8 @@ class DataBrowser(QMainWindow):
         """
 
         super().__init__()
+        install_excepthook()     # an error in one handler must never abort the whole browser
+        use_local_pycache()      # never write __pycache__ into the shared data folders
         self.setWindowTitle("Data Browser")
         self.resize(1600, 1000)
 
@@ -79,6 +83,11 @@ class DataBrowser(QMainWindow):
         self.setMenuBar(self.menu_bar)
 
         # --- Main GUI components ---
+        self._gc_timer = QTimer(self)
+        self._gc_timer.setSingleShot(True)
+        self._gc_timer.setInterval(3000)
+        self._gc_timer.timeout.connect(force_garbage_collect)
+
         self.folder_tree = FolderTreeWidget(root_path, self.on_folder_selected)
         self.center_view = CenterView()
         self.right_tabs = RightPanelTabs(client_station)
@@ -105,6 +114,8 @@ class DataBrowser(QMainWindow):
         handler.setLevel(logging.DEBUG)
         logging.getLogger().addHandler(handler)
         logging.getLogger().setLevel(logging_level)
+        self.stall_watchdog = UiStallWatchdog(self)
+        QTimer.singleShot(1000, warm_up_imports_in_background)
 
         # --- Main layout ---
         self.outer_splitter = QSplitter(Qt.Vertical)
@@ -133,17 +144,26 @@ class DataBrowser(QMainWindow):
         self.move(x, y)
 
     def on_folder_selected(self, folder_path):
-        self.center_view.clear()
-        self.right_tabs.clear()
+        # Acknowledge the click before the (unavoidably synchronous) load + draw: paint the new
+        # tree selection now and show a busy cursor until the folder is on screen.
+        self.folder_tree.tree.viewport().repaint()
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            self.center_view.clear()
+            self.right_tabs.clear()
 
-        if is_datafolder(folder_path):
-            force_garbage_collect()
-            self.center_view.load_images(folder_path)
-            self.right_tabs.update_content(folder_path)
-        else:
-            # Not an Acadia data folder, but still render any pictures it
-            # contains so plain image folders are browsable in the plot view.
-            self.center_view.load_images(folder_path, is_data_folder=False)
+            if is_datafolder(folder_path):
+                self.center_view.load_images(folder_path)
+                self.right_tabs.update_content(folder_path)
+            else:
+                # Not an Acadia data folder, but still render any pictures it
+                # contains so plain image folders are browsable in the plot view.
+                self.center_view.load_images(folder_path, is_data_folder=False)
+        finally:
+            QApplication.restoreOverrideCursor()
+        # A full gc.collect() used to run synchronously on every click (~35 ms, more as the heap
+        # grows). Collect once, after clicking stops, to free the previous figures/runtimes.
+        self._gc_timer.start()
 
     def apply_theme(self, theme_name):
         try:
@@ -285,10 +305,23 @@ class DataBrowser(QMainWindow):
         # remember the data root so the next launch reopens it (see resolve_startup_root)
         update_user_config(last_root=self.folder_tree.root_path)
 
+    def shutdown(self):
+        """Stop every timer and background thread (safe to call more than once)."""
+        self.stall_watchdog.stop()
+        self._gc_timer.stop()
+        self.folder_tree.shutdown()          # background folder index thread
+        self.center_view.live.live_plot.timer.stop()
+        self.right_tabs.log_tab.timer.stop()
+
     def closeEvent(self, event):
         try:
             self.save_ui_settings()
+        except Exception as e:
+            logger.error(f"Failed to save UI settings: {e}", exc_info=True)
         finally:
+            # Child widgets don't receive closeEvent, so the folder index thread used to keep
+            # running and the app aborted on exit ("QThread: Destroyed while thread is still running").
+            self.shutdown()
             super().closeEvent(event)
 
 

@@ -48,6 +48,7 @@ class CenterView(QWidget):
         self._folder = None
         self._is_data_folder = True
         self._sequence_dirty = True      # sequence needs a (re)trace before showing
+        self._live_dirty = False         # live view needs loading before showing (set in SEQUENCE mode)
 
         self.stack = QStackedWidget()
         self.stack.insertWidget(LIVE, self.live)
@@ -112,6 +113,10 @@ class CenterView(QWidget):
         self.btn_live.setChecked(index == LIVE)
         self.btn_sequence.setChecked(index == SEQUENCE)
         self.stack.setCurrentIndex(index)
+        if index == LIVE and self._live_dirty:
+            self._live_dirty = False
+            if self._folder:
+                self.live.load_images(self._folder, is_data_folder=self._is_data_folder)
         if index == SEQUENCE and self._sequence_dirty:
             self.sequence.load_folder(self._folder)   # never raises
             self._sequence_dirty = False
@@ -124,7 +129,13 @@ class CenterView(QWidget):
         self._is_data_folder = is_data_folder
         self._full_path = str(folder_path) if folder_path else ""
         self._update_path_label()
-        self.live.load_images(folder_path, is_data_folder=is_data_folder)
+        if self.mode == SEQUENCE and self.sequence is not None:
+            # the live view is hidden: don't load the runtime/plot until it is shown again
+            self.live.clear()
+            self._live_dirty = True
+        else:
+            self.live.load_images(folder_path, is_data_folder=is_data_folder)
+            self._live_dirty = False
         self._sequence_dirty = True
         if self.mode == SEQUENCE and self.sequence is not None:
             self.sequence.load_folder(folder_path)
@@ -136,6 +147,7 @@ class CenterView(QWidget):
             self.sequence.clear()
         self._folder = None
         self._sequence_dirty = True
+        self._live_dirty = False
         self._full_path = ""
         self._update_path_label()
 

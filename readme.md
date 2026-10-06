@@ -152,6 +152,21 @@ To generate live plotting, the Runtime class must define:
   
 ---
 
+## Checking that the GUI works (smoke test)
+`tests/gui_smoke_test.py` drives every feature once (browsing, live plot, kwargs, search, most recent,
+auto-jump, snapshot + settings, SeeQuence, themes, instruments tab, STOP, trash/restore/empty, closing
+with auto-jump on) and checks that nothing errors, crashes or blocks the window for longer than a budget.
+It runs headless on *copies* of a few runs in a temp folder with a temporary HOME, so it never touches
+your settings, your clipboard or the data share:
+```bash
+python tests/gui_smoke_test.py --data ~/data/<user>/<cooldown>      # picks a few recent runs
+python tests/gui_smoke_test.py --runs <run_dir> <run_dir> ...        # or explicit runs
+```
+If the GUI ever freezes for more than 2 s, the GUI log ("View → GUI Log") shows the Python stack it
+was stuck in.
+
+---
+
 ## Todos:
 ### Short term
 

@@ -86,6 +86,7 @@ class FigureDisplayWidget(QWidget):
         self.setLayout(main_layout)
 
         self.png_paths = []
+        self._pixmaps = {}      # index -> decoded QPixmap of the current folder (resizes reuse it)
         self.folder_path = None
         self.load_pickle_button.setEnabled(False)
         self.switch_to_live_button.setEnabled(False)
@@ -100,10 +101,23 @@ class FigureDisplayWidget(QWidget):
             whatever pictures they contain.
         """
         self.folder_path = folder_path
-        image_files = [f for f in os.listdir(folder_path)
-                       if f.lower().endswith(IMAGE_EXTENSIONS)]
+        self._pixmaps = {}
+        try:
+            image_files = [f for f in os.listdir(folder_path)
+                           if f.lower().endswith(IMAGE_EXTENSIONS)]
+        except OSError as e:      # folder vanished / unreadable (e.g. trashed, NFS hiccup)
+            logger.warning(f"Cannot list {folder_path}: {e}")
+            image_files = []
         self.png_paths = sorted(os.path.join(folder_path, f) for f in image_files)
-        self.figure_selector.clear()
+        # clear()/addItems() emit currentIndexChanged -> show_selected_image; block them so the
+        # first image is decoded once (it was decoded 3x per click), then show it explicitly.
+        self.figure_selector.blockSignals(True)
+        try:
+            self.figure_selector.clear()
+            if self.png_paths:
+                self.figure_selector.addItems([os.path.basename(f) for f in self.png_paths])
+        finally:
+            self.figure_selector.blockSignals(False)
 
         if self.png_paths:
             self.stack.setCurrentIndex(0)
@@ -111,7 +125,6 @@ class FigureDisplayWidget(QWidget):
             self._update_folder_label()
             self.load_pickle_button.setEnabled(is_data_folder)
             self.switch_to_live_button.setEnabled(is_data_folder)
-            self.figure_selector.addItems([os.path.basename(f) for f in self.png_paths])
             self.show_selected_image(0)
             self.live_plot.stop()
         elif is_data_folder:
@@ -135,7 +148,11 @@ class FigureDisplayWidget(QWidget):
     def show_selected_image(self, index):
         if index < 0 or index >= len(self.png_paths):
             return
-        pixmap = QPixmap(self.png_paths[index])
+        pixmap = self._pixmaps.get(index)
+        if pixmap is None:
+            pixmap = QPixmap(self.png_paths[index])
+            if not pixmap.isNull():
+                self._pixmaps[index] = pixmap
         if pixmap.isNull():
             self.image_label.setText("Failed to load image")
         else:
@@ -183,7 +200,11 @@ class FigureDisplayWidget(QWidget):
         self.live_plot.set_theme(theme_name)
 
     def clear(self):
+        self._pixmaps = {}
+        self.png_paths = []
+        self.figure_selector.blockSignals(True)
         self.figure_selector.clear()
+        self.figure_selector.blockSignals(False)
         self.image_label.clear()
         self.image_label.setText("Not a data folder (missing run.py)")
         self.load_pickle_button.setEnabled(False)

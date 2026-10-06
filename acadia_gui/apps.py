@@ -1,3 +1,4 @@
+import os
 import sys
 import argparse
 from pathlib import Path
@@ -13,7 +14,7 @@ from acadia_gui.utils import (
 )
 from acadia_gui.icons import get_icon
 
-logger = logging.getLogger("__name__")
+logger = logging.getLogger(__name__)
 def launch_acadia_gui(root_path:str = None, instrument_station=None, dark_mode=False):
     """
     start the main acadia data browser gui
@@ -39,7 +40,16 @@ def launch_acadia_gui(root_path:str = None, instrument_station=None, dark_mode=F
     window.setWindowTitle(APP_NAME)
     window.setWindowIcon(get_icon("app_icon.svg", recolor=False))  # your icon file here
     window.show()
-    sys.exit(app.exec_())
+    app.aboutToQuit.connect(window.shutdown)
+    exit_code = app.exec_()
+    # A background thread blocked in a call to a dead file server (hard NFS mount) cannot be
+    # joined; letting Python tear it down would abort with "QThread: Destroyed while thread is
+    # still running". Settings are already saved at this point, so exit immediately instead.
+    from acadia_gui.gui.data_folder_view import index_threads_running
+    if index_threads_running():
+        logging.shutdown()
+        os._exit(exit_code)
+    sys.exit(exit_code)
 
 
 

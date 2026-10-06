@@ -11,7 +11,7 @@ from PyQt5.QtGui import QIcon
 
 from acadia_gui import THEME_PATH, CONFIG_PATH
 from acadia_gui.icons import get_icon
-from acadia_gui.utils import load_user_config, save_user_config
+from acadia_gui.utils import load_user_config, update_user_config
 
 MEM_THRES_MEDIUM = 3 # threshold for medium memory usage, in GB
 MEM_THRES_HIGH = 10 # threshold for high memory usage, in GB
@@ -125,8 +125,10 @@ class AppMenuBar(QMenuBar):
         if self.apply_theme_callback:
             self.apply_theme_callback(theme_name)
         if save:
+            # update just this key on disk: saving the config cached at startup would wipe keys
+            # written since (auto_jump_to_newest, last_root, ...)
             self.config["theme"] = theme_name
-            save_user_config(self.config)
+            update_user_config(theme=theme_name)
 
     def update_memory_label(self):
         mem_bytes = psutil.Process(os.getpid()).memory_info().rss
@@ -146,9 +148,8 @@ class AppMenuBar(QMenuBar):
             self.mem_label.setStyleSheet("")
 
         self.mem_label.setText(f"Memory: {mem_gb:.2f} GB")
-
-        if asizeof and self.mem_popup.isVisible():
-            self.update_mem_pop_text()
+        # The per-widget breakdown (pympler asizeof over the whole window) is far too expensive to
+        # recompute every second on the UI thread; it is computed when the popup is opened.
 
     def get_tab_memory_usage(self):
         if self.parent_window is None:
@@ -160,8 +161,9 @@ class AppMenuBar(QMenuBar):
             "KwargsJsonViewer": getattr(self.parent_window.right_tabs, "kwargs_json_tab", None),
             "InstrumentParamsViewer": getattr(self.parent_window.right_tabs, "instruments_tab", None),
             "LogViewer": getattr(self.parent_window.right_tabs, "log_tab", None),
-            "FigureDisplayWidget": getattr(self.parent_window, "figure_display", None),
-            "| - LivePlotWidget": getattr(self.parent_window.figure_display, "live_plot", None),
+            "FigureDisplayWidget": getattr(getattr(self.parent_window, "center_view", None), "live", None),
+            "| - LivePlotWidget": getattr(getattr(getattr(self.parent_window, "center_view", None), "live", None),
+                                          "live_plot", None),
             "\nTotal Tracked Memory": self # cause we gather all the objects here
         }
 
@@ -241,7 +243,7 @@ class AppMenuBar(QMenuBar):
 
 
     def change_gui_scaling(self):
-        current_scale = float(self.config.get("scale_factor", "1.0"))
+        current_scale = float(load_user_config().get("scale_factor", "1.0"))
         new_scale, ok = QInputDialog.getDouble(
             self, "Set GUI Scaling Factor",
             "Recommended values:\n1.0 for 1080p\n1.2 for 2K\n2 for 4K",
@@ -249,7 +251,7 @@ class AppMenuBar(QMenuBar):
         )
         if ok:
             self.config["scale_factor"] = str(new_scale)
-            save_user_config(self.config)
+            update_user_config(scale_factor=str(new_scale))
             QMessageBox.information(self, "Restart Required", "Restart the application to apply new scaling.\n\n"
                                     f"If the GUI becomes unusable, "
                                     f"manually edit the value of `scale_factor` in `{CONFIG_PATH}`")

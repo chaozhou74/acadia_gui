@@ -4,7 +4,6 @@ import inspect
 from functools import partial, wraps
 from typing import Iterable, Union, Callable, Literal, Annotated, get_type_hints, get_args, get_origin
 from collections import defaultdict
-import subprocess
 import logging
 from pathlib import Path
 import ast
@@ -17,7 +16,8 @@ from matplotlib.ticker import ScalarFormatter
 
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QWidgetAction, QMenu, QAction, QApplication, QToolButton, QPushButton,
-    QProgressBar, QLineEdit, QLabel, QComboBox, QGroupBox, QGridLayout, QCheckBox, QSizePolicy, QFrame, QSlider
+    QProgressBar, QLineEdit, QLabel, QComboBox, QGroupBox, QGridLayout, QCheckBox, QSizePolicy, QFrame, QSlider,
+    QDialog, QFormLayout, QSpinBox, QDoubleSpinBox, QDialogButtonBox
 )
 from PyQt5.QtCore import QTimer, Qt, QSize
 from PyQt5 import QtCore, QtGui
@@ -26,9 +26,9 @@ from PyQt5.QtGui import QImage, QPainter, QFont, QIcon, QFontMetrics
 from acadia_qmsmt.utils.saved_runtime_loader import get_saved_runtime_class, load_runtime_from_data_dir
 from acadia_qmsmt.utils import get_registered_plot_methods, get_data_process_method, get_registered_button_methods
 from acadia_qmsmt.utils.annotation import AXS_SHAPE_TAG, get_registered_methods, get_registered_customizer
-from acadia_qmsmt.utils.path_adapter import to_windows_path, detect_platform
 
 from acadia_gui.icons import get_icon, style_mpl_toolbar
+from acadia_gui.clipboard import copy_image_to_clipboard
 
 
 # files used for rough estimate of progress rate, ETA, etc
@@ -231,6 +231,17 @@ class LivePlotWidget(QWidget):
         self._full_folder_path = ""
         self.plot_axes = None
         self.last_axs_shape = None
+        self.process_inputs = {}
+        self.plot_inputs = {}
+        self.update_buttons = {}
+        self.runtime_class = None
+        self.data_processor_name = None
+        self.current_plot_uses_axs = None
+        self.current_plot_axs_shape = None
+        # tight_layout is the single most expensive step of a redraw (0.17 s per call measured on
+        # a histogram plot). It is redone when the axes/plot/folder/canvas size change, and for
+        # every user-forced update, but not on routine live ticks that only refresh data.
+        self._needs_layout = True
 
         # -- default snapshot settings
         self.snapshot_original_dpi = 800 # high dpi
@@ -260,6 +271,7 @@ class LivePlotWidget(QWidget):
         )
         self.canvas.setMinimumHeight(200)
         self.canvas.mpl_connect("button_press_event", self.handle_right_click)
+        self.canvas.mpl_connect("resize_event", lambda _evt: setattr(self, "_needs_layout", True))
 
 
         # --- Plot selector ---
@@ -356,6 +368,13 @@ class LivePlotWidget(QWidget):
 
 
     def start(self, data_path):
+        # Not ready until the new runtime and its inputs are fully built. A stale `ready` from the
+        # previous folder let the plot-selector repopulation below run update_plot against the
+        # NEW runtime with the OLD folder's kwarg widgets -- measured as 3 process+draw passes
+        # per click instead of 1.
+        self.ready = False
+        self.timer.stop()
+        self._needs_layout = True
         self.data_path = data_path
         self._full_folder_path = data_path
         self._update_folder_label()
@@ -408,15 +427,21 @@ class LivePlotWidget(QWidget):
 
         # Get all registered plots and populate dropdown
         self.plot_registry = get_registered_plot_methods(self.rt)
-        self.plot_selector.clear()
-        self.plot_selector.addItems(list(self.plot_registry.keys()))
+        # Repopulate silently: clear()/addItems() each emit currentIndexChanged -> select_plot,
+        # which would build inputs and plot twice before the explicit select_plot below.
+        self.plot_selector.blockSignals(True)
+        try:
+            self.plot_selector.clear()
+            self.plot_selector.addItems(list(self.plot_registry.keys()))
+        finally:
+            self.plot_selector.blockSignals(False)
         try:
             self.data_processor_name = get_data_process_method(self.rt)
         except AttributeError as e:
             logger.error(e, exc_info=True)
             self.data_processor_name = None
 
-        if hasattr(self.rt, self.data_processor_name):
+        if self.data_processor_name and hasattr(self.rt, self.data_processor_name):
             processor_func = getattr(self.rt, self.data_processor_name)
             self.process_inputs = self.create_inputs_from_signature(processor_func, self.process_kwargs_layout,
                                                                     self.process_kwargs_box,
@@ -435,7 +460,7 @@ class LivePlotWidget(QWidget):
     def stop(self):
         self.timer.stop()
         self.canvas.figure.clf()
-        self.canvas.draw()
+        self.canvas.draw_idle()
         self.ready = False
         self.completed_iter = None
 
@@ -524,6 +549,7 @@ class LivePlotWidget(QWidget):
                                                                  update_callback=lambda: self.update_plot(force=True, reprocess_data=False))
         self.checked_right_click_flags.clear()
         self._ax_state_before_action.clear()
+        self._needs_layout = True
 
         # if we already have data, just redo plot
         if self.completed_iter is not None:
@@ -532,7 +558,9 @@ class LivePlotWidget(QWidget):
             except Exception as e:
                 self.canvas.figure.clf()
                 logger.error(f"Error in making plot '{method_name}', {e}", exc_info=True)
-            self.canvas.draw()
+            # draw_idle: render once, at the next paint. A blocking draw() here rendered the
+            # figure, then the paint event that follows rendered it again.
+            self.canvas.draw_idle()
         else: # if we don't have data yet, redo data processing, then plot
             self.update_plot(force=True)
 
@@ -600,7 +628,7 @@ class LivePlotWidget(QWidget):
                         return
 
                 completed_iter = None
-                if hasattr(self.rt, self.data_processor_name):
+                if self.data_processor_name and hasattr(self.rt, self.data_processor_name):
                     processor_func = getattr(self.rt, self.data_processor_name)
                     proc_kwargs = parse_inputs(self.process_inputs)
                     try:
@@ -641,8 +669,9 @@ class LivePlotWidget(QWidget):
         if self.completed_iter is not None:
             try:
                 # Call plot into ax
-                axs = self.make_plot(self.canvas.figure, method_name, prepare_pcm=True, force_remake_axes=force)
-                self.canvas.draw()
+                axs = self.make_plot(self.canvas.figure, method_name, prepare_pcm=True,
+                                     force_remake_axes=force, relayout=force or self._needs_layout)
+                self.canvas.draw_idle()
             except Exception as e:
                 logger.error(f"Error making plot '{method_name}': {e}", exc_info=True)
 
@@ -650,9 +679,13 @@ class LivePlotWidget(QWidget):
         self._next_allowed_update = time.monotonic() + (time.monotonic() - tick_started)
 
 
-    def make_plot(self, figure: Figure, plot_method_name: str, prepare_pcm=False, force_remake_axes=False):
+    def make_plot(self, figure: Figure, plot_method_name: str, prepare_pcm=False, force_remake_axes=False,
+                  relayout=True):
         """
         make the plot with plot_method_name in the given figure
+
+        :param relayout: run `tight_layout`. Plots drawn with `fig=` clear the figure every time, so
+            they are always laid out; `axs=` plots keep their axes positions between live ticks.
         """
         # get plot function
         plot_method = getattr(self.rt, plot_method_name)
@@ -666,6 +699,7 @@ class LivePlotWidget(QWidget):
             figure.clf()
             self.plot_axes = figure.subplots(*self.current_plot_axs_shape)
             self.last_axs_shape = self.current_plot_axs_shape
+            self._needs_layout = True
 
         if self.current_plot_uses_axs is True:
             axs = self.plot_axes
@@ -674,6 +708,7 @@ class LivePlotWidget(QWidget):
                 figure.clf()
                 self.plot_axes = figure.subplots(*self.current_plot_axs_shape)
                 self.last_axs_shape = self.current_plot_axs_shape
+                self._needs_layout = True
                 axs = self.plot_axes  # update `axs` too
             else:
                 for ax in flat_axes:
@@ -702,7 +737,9 @@ class LivePlotWidget(QWidget):
             for label, _, handler in self.right_click_actions:
                 if label in self.checked_right_click_flags[key]:
                     handler(ax)
-        figure.tight_layout()
+        if relayout or self.current_plot_uses_axs is False or self._needs_layout:
+            figure.tight_layout()
+            self._needs_layout = False
         return axs
 
 
@@ -1237,130 +1274,103 @@ class LivePlotWidget(QWidget):
         painter.end()
 
 
-        # if on WSL, we have to first save the figure to a temp file, then transfer it to windows clipboard via
-        # powershell, because WSL doesn't have direct access to windows clipboard.
-        if detect_platform() == "wsl":
-            # --- Save to PNG ---
-            temp_dir = f"/tmp"
-            temp_path = os.path.join(temp_dir, "snapshot.png")
-            final_image.save(temp_path, "PNG")
-
-            # --- Wait for file to appear ---
-            timeout = 2
-            start_time = time.time()
-            while not os.path.exists(temp_path):
-                if time.time() - start_time > timeout:
-                    raise RuntimeError(f"Timeout waiting for snapshot file {temp_path}")
-                time.sleep(0.05)
-
-            # --- Copy to clipboard using PowerShell ---
-            powershell_script = f"""
-            Add-Type -AssemblyName System.Windows.Forms
-            Add-Type -AssemblyName System.Drawing
-            $img = [System.Drawing.Image]::FromFile('{to_windows_path(temp_path)}')
-            [System.Windows.Forms.Clipboard]::SetImage($img)
-            """
-
-            try:
-                subprocess.run(
-                    ['powershell.exe', '-ExecutionPolicy', 'Bypass', '-Command', powershell_script],
-                    check=True
-                )
-                logger.info(f"Snapshot {self.data_path}/{self.current_plot_name} copied to clipboard!")
-            except Exception as e:
-                logger.error(f"Failed to copy snapshot to clipboard: {e}", exc_info=True)
-
-        # if on actual linux, we can just directly copy to clipboard.
-        else:
-            # --- Copy directly to clipboard ---
-            try:
-                clipboard = QApplication.clipboard()
-                clipboard.setImage(final_image)
-                logger.info(f"Snapshot {self.data_path}/{self.current_plot_name} copied to clipboard!")
-            except Exception as e:
-                logger.error(f"Failed to copy snapshot to clipboard: {e}", exc_info=True)
+        # Hand the image to the clipboard asynchronously (on WSL via powershell.exe in a QProcess
+        # with a closed stdin and a timeout) -- the GUI never waits on it. See acadia_gui.clipboard.
+        copy_image_to_clipboard(final_image, f"{self.data_path}/{self.current_plot_name}")
 
         # clean up
         del canvas
         fig.clf()
         del fig
 
-    def show_snapshot_settings(self):
+    def show_snapshot_settings(self, *_):
         """
-        menu for adjusting the snapshot parameters
+        Dialog for the snapshot size settings (right-click on the snapshot button). The values are
+        kept on this widget, i.e. for as long as the GUI is open.
+
+        A real dialog, not line edits embedded in a QMenu: a menu grabs the keyboard for its own
+        navigation, so typing into fields inside it was unreliable (notably under Wayland/WSLg).
         """
-        menu = QMenu(self)
-        # --- Create a small QWidget to hold all input fields ---
-        widget = QWidget()
-        layout = QGridLayout(widget)
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Snapshot settings")
+        form = QFormLayout(dialog)
 
-        dpi_input = QLineEdit(str(self.snapshot_original_dpi))
-        width_input = QLineEdit(str(self.snapshot_original_width_inch))
-        height_input = QLineEdit(str(self.snapshot_original_height_inch))
-        scale_input = QLineEdit(str(self.snapshot_scale_factor))
-        font_input = QLineEdit(str(self.snapshot_title_font))
+        dpi_input = QSpinBox()
+        dpi_input.setRange(50, 2400)
+        dpi_input.setSingleStep(50)
+        dpi_input.setValue(int(self.snapshot_original_dpi))
+        dpi_input.setToolTip("DPI of the original figure before scaling")
 
-        for lineedit in (dpi_input, width_input, height_input, scale_input, font_input):
-            lineedit.setFixedWidth(50)
+        width_input = QDoubleSpinBox()
+        width_input.setRange(1.0, 30.0)
+        width_input.setDecimals(2)
+        width_input.setSingleStep(0.5)
+        width_input.setValue(float(self.snapshot_original_width_inch))
+        width_input.setToolTip("Width of the original figure before scaling")
 
-        label_ = QLabel("Original DPI:")
-        label_.setToolTip("DPI of the original figure before scaling")
-        layout.addWidget(label_, 0, 0)
-        layout.addWidget(dpi_input, 0, 1)
-        label_ = QLabel("Original width (in):")
-        label_.setToolTip("Width of the original figure before scaling")
-        layout.addWidget(label_, 1, 0)
-        layout.addWidget(width_input, 1, 1)
-        label_ = QLabel("Original height (in):")
-        label_.setToolTip("Height of the original figure before scaling")
-        layout.addWidget(label_, 2, 0)
-        layout.addWidget(height_input, 2, 1)
-        label_ = QLabel("Scale Factor:")
-        label_.setToolTip("Scaling factor applied to the original figure, for copying into clipboard")
-        layout.addWidget(label_, 3, 0)
-        layout.addWidget(scale_input, 3, 1)
-        label_ = QLabel("Title Font Size:")
-        label_.setToolTip("Font size of the data path title")
-        layout.addWidget(label_, 4, 0)
-        layout.addWidget(font_input, 4, 1)
+        height_input = QDoubleSpinBox()
+        height_input.setRange(1.0, 30.0)
+        height_input.setDecimals(2)
+        height_input.setSingleStep(0.5)
+        height_input.setValue(float(self.snapshot_original_height_inch))
+        height_input.setToolTip("Height of the original figure before scaling")
 
+        scale_input = QDoubleSpinBox()
+        scale_input.setRange(0.01, 2.0)
+        scale_input.setDecimals(3)
+        scale_input.setSingleStep(0.01)
+        scale_input.setValue(float(self.snapshot_scale_factor))
+        scale_input.setToolTip("Scaling factor applied to the original figure, for copying into clipboard")
 
-        widget_action = QWidgetAction(menu)
-        widget_action.setDefaultWidget(widget)
-        menu.addAction(widget_action)
+        font_input = QSpinBox()
+        font_input.setRange(4, 72)
+        font_input.setValue(int(self.snapshot_title_font))
+        font_input.setToolTip("Font size of the data path title")
 
-        # --- Add OK and Cancel buttons at the bottom ---
-        ok_action = QAction("OK", self)
-        menu.addAction(ok_action)
-        def accept():
-            try:
-                self.snapshot_original_dpi = int(dpi_input.text())
-                self.snapshot_original_width_inch = float(width_input.text())
-                self.snapshot_original_height_inch = float(height_input.text())
-                self.snapshot_scale_factor = float(scale_input.text())
-                self.snapshot_title_font = int(font_input.text())
-            except ValueError:
-                pass
-            menu.close()
-        ok_action.triggered.connect(accept)
+        result_label = QLabel()
+        def update_result_size():
+            w = int(width_input.value() * dpi_input.value() * scale_input.value())
+            h = int(height_input.value() * dpi_input.value() * scale_input.value())
+            result_label.setText(f"{w} x {h} px")
+        for spin in (dpi_input, width_input, height_input, scale_input):
+            spin.valueChanged.connect(update_result_size)
+        update_result_size()
 
-        # --- Connect Enter key (returnPressed) ---
-        for lineedit in (dpi_input, width_input, height_input, scale_input, font_input):
-            lineedit.returnPressed.connect(accept)
+        form.addRow("Original DPI:", dpi_input)
+        form.addRow("Original width (in):", width_input)
+        form.addRow("Original height (in):", height_input)
+        form.addRow("Scale factor:", scale_input)
+        form.addRow("Title font size:", font_input)
+        form.addRow("Snapshot size:", result_label)
 
-        # # --- Make menu release the button when it closes ---
-        def reset_button():
-            self.snapshot_button.setDown(False)
-            self.snapshot_button.update()
-        menu.aboutToHide.connect(reset_button)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
 
-        # --- Show the menu just below the snapshot button ---
-        menu.exec_(self.snapshot_button.mapToGlobal(QtCore.QPoint(0, self.snapshot_button.height())))
+        self.snapshot_settings_dialog = dialog   # reachable for tests
+        if dialog.exec_() == QDialog.Accepted:
+            self.snapshot_original_dpi = dpi_input.value()
+            self.snapshot_original_width_inch = width_input.value()
+            self.snapshot_original_height_inch = height_input.value()
+            self.snapshot_scale_factor = scale_input.value()
+            self.snapshot_title_font = font_input.value()
+            logger.info(f"Snapshot settings: {self.snapshot_original_width_inch}x{self.snapshot_original_height_inch} in"
+                        f" @ {self.snapshot_original_dpi} dpi, scale {self.snapshot_scale_factor}"
+                        f" -> {result_label.text()}")
+        self.snapshot_settings_dialog = None
+        self.snapshot_button.setDown(False)
 
     # ---------- stop button behaviour ---------------
     def drop_stop_flag(self):
+        if not self.data_path:
+            return
         stop_path = Path(self.data_path) / STOP_INDICATOR_FILE
-        stop_path.touch(exist_ok=True)
+        try:
+            stop_path.touch(exist_ok=True)
+        except OSError as e:
+            logger.error(f"Could not stop the run: failed to write {stop_path}: {e}")
+            return
         logger.info(f"Dropped '{STOP_INDICATOR_FILE}' in {self.data_path}")
         self.update_stop_button_state()
 
@@ -1421,8 +1431,10 @@ class LivePlotWidget(QWidget):
         self.plot_inputs = {}
         self.update_buttons = {}
 
-        # Reset dropdown and state
+        # Reset dropdown and state (silently: no select_plot for an empty selector)
+        self.plot_selector.blockSignals(True)
         self.plot_selector.clear()
+        self.plot_selector.blockSignals(False)
         self.checked_right_click_flags.clear()
         self._ax_state_before_action.clear()
         self.current_plot_name = None
@@ -1458,7 +1470,8 @@ class LivePlotWidget(QWidget):
         self.last_mtime = 0
 
         self.canvas.figure.clf()
-        self.canvas.draw()
+        self.canvas.draw_idle()
+        self._needs_layout = True
 
         # The kwarg/button group boxes just got emptied above. The QVBoxLayout
         # that places these 3 boxes (kwargs_row) caches each box's minimum size
