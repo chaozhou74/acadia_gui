@@ -456,7 +456,7 @@ class FolderTreeWidget(QWidget):
         is_in_trash = os.path.basename(parent_dir) == TRASH_FOLDER_NAME
         is_trash = os.path.basename(path) == TRASH_FOLDER_NAME
 
-        menu = QMenu()
+        menu = QMenu(self.tree)   # parented: Wayland popups need a parent surface
         menu.addAction("Open in File Explorer")
         menu.addAction("Copy Path")
 
@@ -759,7 +759,7 @@ class FolderTreeWidget(QWidget):
         """
         lock to always look at the most recent data folder
         """
-        menu = QMenu()
+        menu = QMenu(self.recent_button)
         action_text = "Unlock auto-jump" if self.recent_lock_enabled else "Auto-jump to newest"
         action = menu.addAction(action_text)
         result = menu.exec_(self.recent_button.mapToGlobal(pos))

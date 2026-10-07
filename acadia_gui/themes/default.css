@@ -202,3 +202,19 @@ QPushButton#viewToggle:checked {
 QLabel#centerPath {
     color: #666666;
 }
+
+
+/* ============ In-window dropdown lists (WSL) ============ */
+QListView#inlineComboPopup {
+    background-color: #ffffff;
+    color: #202020;
+    border: 1px solid #aaaaaa;
+    outline: 0;
+}
+QListView#inlineComboPopup::item {
+    padding: 3px 6px;
+}
+QListView#inlineComboPopup::item:selected, QListView#inlineComboPopup::item:hover {
+    background-color: #3a8fd0;
+    color: #ffffff;
+}

@@ -117,10 +117,10 @@ To generate live plotting, the Runtime class must define:
 ## Trouble shooting
 -  **Error loading 'xcb' Plugin**
 
-   > **Note:** On WSL the app now defaults to the **Wayland** backend, so this error
-   > should no longer occur out of the box. The fix below is only needed if Wayland is
-   > unavailable and you must fall back to `xcb` (e.g. you set `QT_QPA_PLATFORM=xcb`
-   > yourself, or run on a non-WSLg setup).
+   > **Note:** On WSL the app picks the backend from the GUI scale: **Wayland** at scale 1
+   > (menus/dropdowns close fastest), **xcb** at any other scale (e.g. 2 for 4K), because WSLg
+   > misplaces mouse clicks inside Wayland popups when Qt scaling is active. If the xcb plugin's
+   > libraries are missing it falls back to Wayland and logs a hint; the fix below installs them.
 
    When running for the first time on WSL, a common error is:
     ```

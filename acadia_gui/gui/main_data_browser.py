@@ -3,6 +3,7 @@ import logging
 import gc
 import os
 import json
+import time
 
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QMainWindow, QVBoxLayout, QSplitter, QSizePolicy,
@@ -17,8 +18,11 @@ from acadia_gui.gui.center_view import CenterView
 from acadia_gui import THEME_PATH
 from acadia_gui.utils import set_qt_scaling, load_user_config, get_qt_scaling, update_user_config
 from acadia_gui.icons import ICON_PATH, set_icon_color, icon_color_for_theme
+from acadia_gui.gui.inline_combo import install_inline_combo_popups
+from acadia_qmsmt.utils.path_adapter import detect_platform
 from acadia_gui.safety import (install_excepthook, use_local_pycache, UiStallWatchdog,
-                               warm_up_imports_in_background)
+                               warm_up_imports_in_background, install_file_log, DialogCenterer,
+                               install_fast_popup_close)
 
 logger = logging.getLogger(__name__)
 
@@ -114,7 +118,13 @@ class DataBrowser(QMainWindow):
         handler.setLevel(logging.DEBUG)
         logging.getLogger().addHandler(handler)
         logging.getLogger().setLevel(logging_level)
+        install_file_log()
         self.stall_watchdog = UiStallWatchdog(self)
+        self._dialog_centerer = DialogCenterer(self)
+        QApplication.instance().installEventFilter(self._dialog_centerer)
+        if detect_platform() == "wsl":
+            install_inline_combo_popups()   # dropdown lists drawn inside the window (WSLg popups misbehave)
+        install_fast_popup_close()
         QTimer.singleShot(1000, warm_up_imports_in_background)
 
         # --- Main layout ---
@@ -144,6 +154,13 @@ class DataBrowser(QMainWindow):
         self.move(x, y)
 
     def on_folder_selected(self, folder_path):
+        started = time.perf_counter()
+        self._on_folder_selected(folder_path)
+        elapsed = time.perf_counter() - started
+        if elapsed > 0.5:
+            logger.info(f"Opening {folder_path} took {elapsed:.2f} s")
+
+    def _on_folder_selected(self, folder_path):
         # Acknowledge the click before the (unavoidably synchronous) load + draw: paint the new
         # tree selection now and show a busy cursor until the folder is on screen.
         self.folder_tree.tree.viewport().repaint()

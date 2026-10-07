@@ -15,6 +15,25 @@ logger = logging.getLogger(__name__)
 # Image formats we can render in the plot view.
 IMAGE_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp', '.tif', '.tiff')
 
+LARGE_RUN_BYTES = 100e6   # announce loads of runs with more data than this
+
+
+def _data_size_bytes(folder):
+    """Total size of the record files (*.bin) in a data folder."""
+    total = 0
+    try:
+        with os.scandir(folder) as it:
+            for e in it:
+                if e.name.endswith(".bin"):
+                    try:
+                        total += e.stat().st_size
+                    except OSError:
+                        pass
+    except OSError:
+        pass
+    return total
+
+
 class FigureDisplayWidget(QWidget):
     def __init__(self):
         super().__init__()
@@ -138,6 +157,16 @@ class FigureDisplayWidget(QWidget):
             try:
                 self.live_plot.clear()
                 self.stack.setCurrentIndex(1)
+                # Loading is synchronous (the acadia data reader holds the GIL, so a worker thread
+                # would not keep the window responsive either). For big runs, say so on screen
+                # BEFORE the load starts, so a long load doesn't look like a frozen window.
+                size = _data_size_bytes(self.folder_path)
+                if size > LARGE_RUN_BYTES:
+                    self.live_plot.progress_bar.setValue(0)
+                    self.live_plot.progress_bar.setFormat(
+                        f"Loading {size / 1e6:.0f} MB of data -- this can take a while...")
+                    logger.info(f"Loading a large run ({size / 1e6:.0f} MB): {self.folder_path}")
+                    self.repaint()
                 self.live_plot.start(self.folder_path)
             except Exception as e:
                 self.stack.setCurrentIndex(0)

@@ -328,3 +328,20 @@ QFrame#MemoryPopup QTextEdit {
     font-family: Consolas, Menlo, monospace;
     font-size: 10pt;
 }
+
+
+/* ============ In-window dropdown lists (WSL) ============ */
+QListView#inlineComboPopup {
+    background-color: #292929;
+    color: #f0f0f0;
+    border: 1px solid #555;
+    outline: 0;
+}
+QListView#inlineComboPopup::item {
+    padding: 3px 6px;
+}
+QListView#inlineComboPopup::item:selected, QListView#inlineComboPopup::item:hover {
+    background-color: #3a70b2;
+    color: #ffffff;
+    border-radius: 0px;
+}

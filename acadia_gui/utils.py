@@ -48,16 +48,55 @@ def check_wsl_interop():
     return False
 
 
-def set_wsl_display_backend():
-    """On WSL, use the Wayland Qt backend instead of the default xcb/XWayland.
+def set_wsl_display_backend(scale=None):
+    """On WSL, pick the Qt backend that handles menus and dropdowns correctly.
 
-    Under WSLg, XWayland tears down popup (override-redirect) windows slowly,
-    which makes menus and combo-box dropdowns lag noticeably before collapsing.
-    The native Wayland backend does not have this problem. No-op off WSL, and
-    respects an explicit QT_QPA_PLATFORM if the user already set one.
+    * scale == 1 -> native Wayland. Under WSLg, XWayland tears down popup
+      (override-redirect) windows slowly (~1.2 s measured), so menus and combo-box
+      dropdowns linger before collapsing; Wayland closes them in ~0.3 s.
+    * any other scale (e.g. 2.0 for 4K) -> xcb/XWayland. With a Qt scale factor != 1,
+      WSLg maps mouse input on Wayland POPUPS to the wrong place: clicking an item in an
+      open dropdown/menu misses it (measured with real Windows mouse input: 0/4 dropdown
+      items selectable at 2x on Wayland, with either QT_SCALE_FACTOR or
+      QT_SCREEN_SCALE_FACTORS; 4/4 on xcb, and 4/4 on Wayland at 1x). Rendering is equally
+      sharp and fast on both; the only cost is the slower popup teardown above.
+
+    No-op off WSL, and respects an explicit QT_QPA_PLATFORM if the user already set one.
     """
-    if detect_platform() == "wsl":
-        os.environ.setdefault("QT_QPA_PLATFORM", "wayland")
+    if detect_platform() != "wsl":
+        return
+    if "QT_QPA_PLATFORM" in os.environ:
+        return
+    if scale is None:
+        try:
+            scale = float(load_user_config().get("scale_factor", 1.0))
+        except (TypeError, ValueError):
+            scale = 1.0
+    if abs(scale - 1.0) < 1e-6:
+        os.environ["QT_QPA_PLATFORM"] = "wayland"
+    elif _xcb_plugin_usable():
+        os.environ["QT_QPA_PLATFORM"] = "xcb"
+    else:
+        # Starting on xcb would abort ("Could not load the Qt platform plugin xcb"); Wayland
+        # still works, but at this scale clicks inside dropdown lists/menus may miss.
+        os.environ["QT_QPA_PLATFORM"] = "wayland"
+        logger.warning("Qt's xcb plugin is missing system libraries, using Wayland. At a GUI scale "
+                       "other than 1, clicking items in dropdowns/menus may not register; install the "
+                       "xcb libraries (see the acadia_gui readme, 'Error loading xcb Plugin') to fix.")
+
+
+def _xcb_plugin_usable() -> bool:
+    """True if Qt's xcb platform plugin has all its shared libraries (checked with ldd)."""
+    try:
+        from PyQt5.QtCore import QLibraryInfo
+        plugin = Path(QLibraryInfo.location(QLibraryInfo.PluginsPath)) / "platforms" / "libqxcb.so"
+        if not plugin.exists():
+            return False
+        out = subprocess.run(["ldd", str(plugin)], stdin=subprocess.DEVNULL, capture_output=True,
+                             text=True, timeout=5).stdout
+        return "not found" not in out
+    except Exception:
+        return False
 
 
 def _venv_exec_path():

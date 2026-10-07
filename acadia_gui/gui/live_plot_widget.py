@@ -249,6 +249,7 @@ class LivePlotWidget(QWidget):
         self.snapshot_original_height_inch = 4
         self.snapshot_scale_factor = 0.1 # scale factor for the smaller plot
         self.snapshot_title_font = 10
+        self.snapshot_settings_dialog = None   # the settings dialog while it is open
 
 
         # Each item is a tuple: (label, is_checkable, handler_function)
@@ -1112,7 +1113,8 @@ class LivePlotWidget(QWidget):
             return  # shouldn't happen
 
         key = (plot_name, ax_index)
-        menu = QMenu()
+        # Parented to the canvas: on Wayland a popup needs a parent surface to anchor to.
+        menu = QMenu(self.canvas)
 
         for label, is_checkable, handler in self.right_click_actions:
             action = QAction(label, self)
@@ -1142,7 +1144,15 @@ class LivePlotWidget(QWidget):
 
             menu.addAction(action)
 
-        menu.exec_(QtGui.QCursor.pos())
+        # Open at the click itself. QCursor.pos() is not available to Wayland clients (it returns a
+        # stale/global-origin position), so the menu used to open in the wrong place or off-screen.
+        gui_event = getattr(event, "guiEvent", None)
+        if gui_event is not None and hasattr(gui_event, "pos"):
+            local = gui_event.pos()
+        else:
+            dpr = self.canvas.devicePixelRatioF() or 1.0
+            local = QtCore.QPoint(int(event.x / dpr), int(self.canvas.height() - event.y / dpr))
+        menu.exec_(self.canvas.mapToGlobal(local))
 
     def autoscale_ax(self, ax):
         # Autoscale line/plot data
@@ -1349,6 +1359,17 @@ class LivePlotWidget(QWidget):
         form.addRow(buttons)
 
         self.snapshot_settings_dialog = dialog   # reachable for tests
+        def report_focus():
+            try:
+                if dialog.isVisible():
+                    fw = QApplication.focusWidget()
+                    logger.info(f"Snapshot settings dialog: active={dialog.isActiveWindow()} "
+                                f"focus={type(fw).__name__ if fw else None}")
+            except RuntimeError:     # already closed and deleted
+                pass
+        QTimer.singleShot(500, report_focus)
+        dialog.raise_()
+        dialog.activateWindow()
         if dialog.exec_() == QDialog.Accepted:
             self.snapshot_original_dpi = dpi_input.value()
             self.snapshot_original_width_inch = width_input.value()
@@ -1358,7 +1379,10 @@ class LivePlotWidget(QWidget):
             logger.info(f"Snapshot settings: {self.snapshot_original_width_inch}x{self.snapshot_original_height_inch} in"
                         f" @ {self.snapshot_original_dpi} dpi, scale {self.snapshot_scale_factor}"
                         f" -> {result_label.text()}")
+        else:
+            logger.info("Snapshot settings dialog cancelled")
         self.snapshot_settings_dialog = None
+        dialog.deleteLater()
         self.snapshot_button.setDown(False)
 
     # ---------- stop button behaviour ---------------

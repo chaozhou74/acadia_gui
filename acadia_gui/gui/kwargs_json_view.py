@@ -108,7 +108,7 @@ class KwargsJsonViewer(QWidget):
         if not selected:
             return
 
-        menu = QMenu()
+        menu = QMenu(self.tree)   # parented: Wayland popups need a parent surface
         obj = selected.data(0, Qt.UserRole)
 
         # add copy option
