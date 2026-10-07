@@ -100,8 +100,13 @@ def _show_popup(combo: QComboBox):
     top = combo.window()
     ov = getattr(combo, "_inline_overlay", None)
     if ov is None or ov.parent() is not top:
+        if ov is not None:
+            ov.deleteLater()
         ov = _Overlay(combo, top)
         combo._inline_overlay = ov
+        # the overlay is a child of the top-level window, not of the combo: free it with the combo
+        # (views like SeeQuence rebuild their dropdowns often)
+        combo.destroyed.connect(ov.deleteLater)
     count = combo.count()
     if count == 0:
         return
