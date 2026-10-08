@@ -37,7 +37,6 @@ CREATE_INDICATOR_FILE = "run.py" # file whose creation time indicates the experi
 STOP_INDICATOR_FILE = ".stop"
 
 TOTAL_ITER_ATTRIBUTE = "iterations" # runtime class attribute that defines the total number of iterations
-DATAMANAGER_ATTRIBUTE = "data" # runtime class attribute for data manager
 
 logger = logging.getLogger(__name__)
 
@@ -353,6 +352,25 @@ class LivePlotWidget(QWidget):
         self._ax_state_before_action = {}  # (plot_name, ax_index, label) -> state dict
 
 
+    def _load_runtime(self):
+        """
+        Load the runtime (with its data) from `data_path` and run its customizer, if any. Used when a folder is opened
+        and on every refresh: `runtime_class.load` decides how the data is read, which allows customizing data read.
+        """
+        self.rt = self.runtime_class.load(self.data_path)
+
+        # run the customizer for programmatic plot/button modification if it exists
+        customizer_name = get_registered_customizer(self.rt)
+        if customizer_name is not None:
+            try:# call the customizer method for preparing programmatically generated plots/buttons
+                getattr(self.rt, customizer_name)()
+                logger.debug(f"Using customizer method {self.runtime_class.__name__}.{customizer_name}")
+            except Exception as e:
+                logger.error(f"Error in customizer method "
+                             f"{self.runtime_class.__name__}.{customizer_name} : {e}", exc_info=True)
+        else:
+            logger.debug(f"No customizer method found in {self.runtime_class.__name__}, skipped.")
+
     def start(self, data_path):
         self.data_path = data_path
         self._full_folder_path = data_path
@@ -371,20 +389,7 @@ class LivePlotWidget(QWidget):
                            f"Using the global version", exc_info=True)
             self.runtime_class = get_saved_runtime_class(data_path, use_saved_qmsmt=False)
 
-        self.rt = self.runtime_class.load(self.data_path)
-
-        # run the customizer for programmatic plot/button modification if it exists
-        customizer_name = get_registered_customizer(self.rt)
-        if customizer_name is not None:
-            try:# call the customizer method for preparing programmatically generated plots/buttons
-                getattr(self.rt, customizer_name)()
-                logger.debug(f"Using customizer method {self.runtime_class.__name__}.{customizer_name}")
-            except Exception as e:
-                logger.error(f"Error in customizer method "
-                             f"{self.runtime_class.__name__}.{customizer_name} : {e}", exc_info=True)
-        else:
-            logger.debug(f"No customizer method found in {self.runtime_class.__name__}, skipped.")
-
+        self._load_runtime()
 
         self.total_iter =  getattr(self.rt, TOTAL_ITER_ATTRIBUTE, None)
         if self.total_iter is None:
@@ -553,18 +558,12 @@ class LivePlotWidget(QWidget):
 
         if reprocess_data:
             try:
-                # reload runtime data
+                # reload the runtime with its data
                 try:
-                    getattr(self.rt, DATAMANAGER_ATTRIBUTE).load(self.data_path)
+                    self._load_runtime()
                 except Exception as e:
-                    logger.warning(f"Failed to load data from existing runtime: {e}. Attempting full reload...",
-                                   exc_info=True)
-                    try:
-                        self.rt = self.runtime_class.load(self.data_path)
-                        logger.info(f"Reloaded runtime from {self.data_path}")
-                    except Exception as e2:
-                        logger.error(f"Failed to reload runtime: {e2}", exc_info=True)
-                        return
+                    logger.error(f"Failed to reload runtime: {e}", exc_info=True)
+                    return
 
                 completed_iter = None
                 if hasattr(self.rt, self.data_processor_name):
