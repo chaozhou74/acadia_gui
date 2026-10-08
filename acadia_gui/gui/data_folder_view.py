@@ -207,6 +207,10 @@ class FolderTreeWidget(QWidget):
         self.recent_button.setContextMenuPolicy(Qt.CustomContextMenu)
         self.recent_button.customContextMenuRequested.connect(self.toggle_recent_lock)
 
+        self.collapse_all_button = QPushButton(get_icon("collapse_all.svg"), "")
+        self.collapse_all_button.setToolTip("Collapse all expanded folders")
+        self.collapse_all_button.clicked.connect(self.collapse_all_folders)
+
         self.search_button = QPushButton(get_icon("search.svg"), "")
         self.search_button.setToolTip("Search folders by name")
         self.search_button.setCheckable(True)
@@ -257,6 +261,7 @@ class FolderTreeWidget(QWidget):
         button_row_lower = QHBoxLayout()
         button_row_lower.addWidget(self.back_button)
         button_row_lower.addWidget(self.forward_button)
+        button_row_lower.addWidget(self.collapse_all_button)
 
 
         layout = QVBoxLayout(self)
@@ -601,6 +606,19 @@ class FolderTreeWidget(QWidget):
             self.recent_button.setToolTip("Finding the newest data folder (indexing)...")
             logger.info("Indexing the data folders; will jump to the newest one when done.")
 
+    def collapse_all_folders(self):
+        """Collapse every expanded folder, keeping the selected folder's top-level ancestor in view."""
+        current = self.tree.currentIndex()
+        self.tree.collapseAll()
+        self.last_expanded_path = None
+        if current.isValid():
+            top = current
+            while top.parent().isValid() and top.parent() != self.tree.rootIndex():
+                top = top.parent()
+            self.tree.scrollTo(top)
+        else:
+            self.tree.scrollToTop()
+
     def sort_by_mtime(self):
         self.tree.sortByColumn(3, self.current_sort_order)
         # Toggle the sort order for next time
@@ -746,6 +764,7 @@ class FolderTreeWidget(QWidget):
         self.refresh_button.setIcon(get_icon("refresh.svg"))
         self.sort_mtime_button.setIcon(get_icon("sort_by_time.svg"))
         self.search_button.setIcon(get_icon("search.svg"))
+        self.collapse_all_button.setIcon(get_icon("collapse_all.svg"))
         self._set_recent_lock_ui()  # recent button (lock state aware)
 
     # -------------- monitor and lock to the most recent folder ----------

@@ -165,6 +165,20 @@ def main():
           verify=lambda: ft._last_loaded_path not in (None, copies[0]), budget=args.click_budget)
     check("sort / refresh", lambda: (ft.sort_by_mtime(), ft.sort_by_mtime(), ft.refresh_model()))
 
+    def expanded_count():
+        n, stack = 0, [ft.tree.rootIndex()]
+        while stack:
+            idx = stack.pop()
+            for r in range(ft.proxy_model.rowCount(idx)):
+                c = ft.proxy_model.index(r, 0, idx)
+                if ft.tree.isExpanded(c):
+                    n += 1
+                    stack.append(c)
+        return n
+    check("collapse-all button closes every expanded folder",
+          lambda: (ft.focus_path(copies[0]), wait(0.3), ft.collapse_all_button.click()),
+          verify=lambda: expanded_count() == 0)
+
     # ---- search / most recent / auto-jump (background index) ----------------------------------
     def search(text):
         ft.search_button.setChecked(True)
