@@ -272,7 +272,14 @@ class LivePlotWidget(QWidget):
         )
         self.canvas.setMinimumHeight(200)
         self.canvas.mpl_connect("button_press_event", self.handle_right_click)
-        self.canvas.mpl_connect("resize_event", lambda _evt: setattr(self, "_needs_layout", True))
+        # Axes positions are figure fractions fixed by the last tight_layout, so after the canvas
+        # changes size (window/splitter, a panel filling in) the title or tick labels can end up
+        # clipped. A finished run gets no further live ticks, so re-lay out here once resizing settles.
+        self._relayout_timer = QTimer(self)
+        self._relayout_timer.setSingleShot(True)
+        self._relayout_timer.setInterval(120)
+        self._relayout_timer.timeout.connect(self._relayout_after_resize)
+        self.canvas.mpl_connect("resize_event", self._on_canvas_resize)
 
 
         # --- Plot selector ---
@@ -468,6 +475,22 @@ class LivePlotWidget(QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._update_folder_label()
+
+    def _on_canvas_resize(self, _evt):
+        self._needs_layout = True
+        self._relayout_timer.start()        # restarts while a resize is still in progress
+
+    def _relayout_after_resize(self):
+        figure = self.canvas.figure
+        if not figure.axes:
+            return
+        try:
+            figure.tight_layout()
+        except Exception as e:
+            logger.debug(f"tight_layout after resize failed: {e}")
+            return
+        self._needs_layout = False
+        self.canvas.draw_idle()
 
     def _update_folder_label(self):
         metrics = QFontMetrics(self.folder_label.font())
