@@ -1,13 +1,19 @@
 import os
 import json
+import time
 import logging
-from PyQt5.QtCore import Qt
+import threading
+from PyQt5.QtCore import Qt, QObject, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QTreeWidget, QTreeWidgetItem,
     QCheckBox, QPushButton, QLabel, QApplication
 )
 
 logger = logging.getLogger(__name__)
+
+
+class _LoadDone(QObject):
+    finished = pyqtSignal(list, object)    # (instrument names, error string or None) -> GUI thread
 
 def load_inst_params(path):
     inst_file = os.path.join(path, "inst_params.json")
@@ -49,6 +55,14 @@ class InstrumentParamsViewer(QWidget):
         self.tree.itemChanged.connect(self.on_item_changed)
         self.layout.addWidget(self.tree)
 
+        # background parameter loading (see load_selected_parameters)
+        self._load_thread = None
+        self._load_started = 0.0
+        self._load_done = _LoadDone()
+        self._load_done.finished.connect(self._on_load_finished)
+        self._load_label_timer = QTimer(self)
+        self._load_label_timer.timeout.connect(self._tick_load_label)
+
         # Load button
         self.load_button = QPushButton("Load Parameters")
         self.load_button.clicked.connect(self.load_selected_parameters)
@@ -67,7 +81,7 @@ class InstrumentParamsViewer(QWidget):
         self.tree.show()
         self.select_all_checkbox.show()
         self.load_button.show()
-        self.load_button.setEnabled(self.client_station is not None)
+        self.load_button.setEnabled(self.client_station is not None and self._load_thread is None)
 
         self.inst_data = load_inst_params(folder_path)
         if not self.inst_data or not isinstance(self.inst_data, dict) or set(self.inst_data) == {"error"}:
@@ -120,27 +134,73 @@ class InstrumentParamsViewer(QWidget):
         return sorted(self.selected_instruments)
 
     def load_selected_parameters(self):
-        if not self.inst_data:
-            return
-        if self.client_station is None:
+        """Send the selected instruments' saved parameters to the instrument server.
+
+        Runs in the background: the server only replies once EVERY parameter is set, and some
+        sets are slow by design (e.g. the QDAC ramps at 0.1 V/s: 60 s measured for two channels
+        moving 3 V each), which used to freeze the whole browser for the duration.
+        The worker uses its OWN server connection (ZMQ sockets must not be shared between
+        threads), with the station's host/port/timeout, and sends exactly what
+        ClientStation.set_parameters sends.
+        """
+        if not self.inst_data or self.client_station is None or self._load_thread is not None:
             return
         dd = {k: v for k, v in self.inst_data.items() if k in self.selected_instruments}
+        station_instruments = getattr(self.client_station, "instruments", None)
+        if station_instruments is not None:
+            skipped = sorted(k for k in dd if k not in station_instruments)
+            for k in skipped:
+                logger.warning(f"Instrument {k} parameter neglected, as it doesn't belong to this station")
+            dd = {k: v for k, v in dd.items() if k in station_instruments}
         if not dd:
             logger.warning("No instruments selected; nothing loaded.")
             return
-        logger.info(f"!!! Loading parameters to instruments: {sorted(dd)}")
-        # Synchronous on purpose: the instrument client talks ZMQ, whose sockets must not be used
-        # from another thread. Busy cursor + no crash on failure.
-        QApplication.setOverrideCursor(Qt.WaitCursor)
+        names = sorted(dd)
+        logger.info(f"!!! Loading parameters to instruments: {names}")
+
+        self._load_started = time.monotonic()
         self.load_button.setEnabled(False)
-        try:
-            self.client_station.set_parameters(dd)
-            logger.info(f"Loaded parameters to instruments: {sorted(dd)}")
-        except Exception as e:
-            logger.error(f"Failed to load parameters to instruments: {e}", exc_info=True)
-        finally:
-            self.load_button.setEnabled(True)
-            QApplication.restoreOverrideCursor()
+        self._tick_load_label()
+        self._load_label_timer.start(1000)
+
+        station = self.client_station
+        emitter = self._load_done
+
+        def work():
+            error = None
+            try:
+                if hasattr(station, "_host") and hasattr(station, "_port"):
+                    from instrumentserver.client.proxy import Client
+                    from instrumentserver.helpers import flatten_dict
+                    client = Client(host=station._host, port=station._port,
+                                    timeout=getattr(station, "_timeout", 900), raise_exceptions=True)
+                    try:
+                        client.setParameters(flatten_dict(dd))
+                    finally:
+                        client.disconnect()
+                else:       # an unfamiliar station object: fall back to its own method
+                    station.set_parameters(dd)
+            except Exception as e:
+                error = f"{type(e).__name__}: {e}"
+            emitter.finished.emit(names, error)
+
+        self._load_thread = threading.Thread(target=work, name="acadia-load-instrument-params", daemon=True)
+        self._load_thread.start()
+
+    def _tick_load_label(self):
+        elapsed = int(time.monotonic() - self._load_started)
+        self.load_button.setText(f"Loading parameters... {elapsed} s (instruments may be ramping)")
+
+    def _on_load_finished(self, names, error):
+        self._load_label_timer.stop()
+        self._load_thread = None
+        self.load_button.setText("Load Parameters")
+        self.load_button.setEnabled(self.client_station is not None)
+        took = time.monotonic() - self._load_started
+        if error is None:
+            logger.info(f"Loaded parameters to instruments: {names} ({took:.1f} s)")
+        else:
+            logger.error(f"Failed to load parameters to instruments {names} after {took:.0f} s: {error}")
 
     def clear(self):
         self.tree.clear()
