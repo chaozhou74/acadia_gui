@@ -59,6 +59,16 @@ def parse_inputs(input_dict):
             kwargs[k] = w.text()  # fallback
     return kwargs
 
+def format_duration(seconds):
+    if not np.isfinite(seconds):
+        return "?"
+    m, s = divmod(int(round(seconds)), 60)
+    h, m = divmod(m, 60)
+    d, h = divmod(h, 24)
+    hms = f"{h:02d}:{m:02d}:{s:02d}"
+    return f"{d}d {hms}" if d else hms
+
+
 def shorten_path_for_display(path, max_chars=55):
     """
     Shorten a given path string to fit within a maximum character limit.
@@ -677,12 +687,12 @@ class LivePlotWidget(QWidget):
             elapsed = last_update_time - start_time
 
             if elapsed > 1e-3 and completed_iter > 0:
-                elapsed_str = time.strftime('%H:%M:%S', time.gmtime(elapsed))
+                elapsed_str = format_duration(elapsed)
                 rate = completed_iter / elapsed  # iterations per second
                 if self.total_iter is not None:
                     remaining_iter = self.total_iter - completed_iter
                     remaining = remaining_iter / rate if rate > 0 else float("inf")
-                    remaining_str = time.strftime('%H:%M:%S', time.gmtime(remaining))
+                    remaining_str = format_duration(remaining)
                 else:
                     remaining_str = "?"
 
