@@ -238,6 +238,13 @@ class LivePlotWidget(QWidget):
         self._full_folder_path = ""
         self.plot_axes = None
         self.last_axs_shape = None
+        # tight_layout is redone when the plot, its axes, the folder or the canvas size change
+        # and on user-forced updates, not on live updates that only bring new data
+        self._needs_layout = True
+        self._laid_out_size = None      # canvas size (px) the last tight_layout was done for
+        # metadata.txt time of the data start() just loaded, while that runtime is still unused:
+        # the first update processes it instead of reading the data a second time
+        self._fresh_load_mtime = None
 
         # -- default snapshot settings
         self.snapshot_original_dpi = 800 # high dpi
@@ -267,6 +274,14 @@ class LivePlotWidget(QWidget):
         )
         self.canvas.setMinimumHeight(200)
         self.canvas.mpl_connect("button_press_event", self.handle_right_click)
+        # Axes positions are figure fractions fixed by the last tight_layout, so after the canvas
+        # changes size the title or tick labels can end up clipped; lay out again once a resize
+        # settles (a finished run gets no further updates that would do it).
+        self._relayout_timer = QTimer(self)
+        self._relayout_timer.setSingleShot(True)
+        self._relayout_timer.setInterval(120)
+        self._relayout_timer.timeout.connect(self._relayout_after_resize)
+        self.canvas.mpl_connect("resize_event", self._on_canvas_resize)
 
 
         # --- Plot selector ---
@@ -388,6 +403,8 @@ class LivePlotWidget(QWidget):
         self.is_paused = False
         self.last_mtime = 0
         self.completed_iter = None
+        self._needs_layout = True
+        self._fresh_load_mtime = None
 
         # Load the saved acadia_qmsmt.py as the acadia_qmsmt.qmsmt submodule
         try:
@@ -399,7 +416,9 @@ class LivePlotWidget(QWidget):
                            f"Using the global version", exc_info=True)
             self.runtime_class = get_saved_runtime_class(data_path, use_saved_qmsmt=False)
 
+        loaded_mtime = self.get_latest_update_time()
         self._load_runtime()
+        self._fresh_load_mtime = loaded_mtime
 
         self.total_iter =  getattr(self.rt, TOTAL_ITER_ATTRIBUTE, None)
         if self.total_iter is None:
@@ -437,6 +456,7 @@ class LivePlotWidget(QWidget):
 
     def stop(self):
         self.timer.stop()
+        self._fresh_load_mtime = None
         self.canvas.figure.clf()
         self.canvas.draw()
         self.ready = False
@@ -527,6 +547,7 @@ class LivePlotWidget(QWidget):
                                                                  update_callback=lambda: self.update_plot(force=True, reprocess_data=False))
         self.checked_right_click_flags.clear()
         self._ax_state_before_action.clear()
+        self._needs_layout = True
 
         # if we already have data, just redo plot
         if self.completed_iter is not None:
@@ -568,12 +589,18 @@ class LivePlotWidget(QWidget):
 
         if reprocess_data:
             try:
-                # reload the runtime with its data
-                try:
-                    self._load_runtime()
-                except Exception as e:
-                    logger.error(f"Failed to reload runtime: {e}", exc_info=True)
-                    return
+                if self._fresh_load_mtime is not None:
+                    # start() has just loaded the runtime and its data: process that rather than
+                    # read it again. Its time stands as the last update, so data written since
+                    # is picked up on the next poll.
+                    self.last_mtime, self._fresh_load_mtime = self._fresh_load_mtime, None
+                else:
+                    # reload the runtime with its data
+                    try:
+                        self._load_runtime()
+                    except Exception as e:
+                        logger.error(f"Failed to reload runtime: {e}", exc_info=True)
+                        return
 
                 completed_iter = None
                 if hasattr(self.rt, self.data_processor_name):
@@ -616,15 +643,20 @@ class LivePlotWidget(QWidget):
         if self.completed_iter is not None:
             try:
                 # Call plot into ax
-                axs = self.make_plot(self.canvas.figure, method_name, prepare_pcm=True, force_remake_axes=force)
+                axs = self.make_plot(self.canvas.figure, method_name, prepare_pcm=True,
+                                     force_remake_axes=force, relayout=force or self._needs_layout)
                 self.canvas.draw()
             except Exception as e:
                 logger.error(f"Error making plot '{method_name}': {e}", exc_info=True)
 
 
-    def make_plot(self, figure: Figure, plot_method_name: str, prepare_pcm=False, force_remake_axes=False):
+    def make_plot(self, figure: Figure, plot_method_name: str, prepare_pcm=False, force_remake_axes=False,
+                  relayout=True):
         """
         make the plot with plot_method_name in the given figure
+
+        :param relayout: run `tight_layout`. Plots drawn with `fig=` clear the figure every time, so
+            they are always laid out; `axs=` plots keep their axes positions between live updates.
         """
         # get plot function
         plot_method = getattr(self.rt, plot_method_name)
@@ -638,6 +670,7 @@ class LivePlotWidget(QWidget):
             figure.clf()
             self.plot_axes = figure.subplots(*self.current_plot_axs_shape)
             self.last_axs_shape = self.current_plot_axs_shape
+            self._needs_layout = True
 
         if self.current_plot_uses_axs is True:
             axs = self.plot_axes
@@ -646,6 +679,7 @@ class LivePlotWidget(QWidget):
                 figure.clf()
                 self.plot_axes = figure.subplots(*self.current_plot_axs_shape)
                 self.last_axs_shape = self.current_plot_axs_shape
+                self._needs_layout = True
                 axs = self.plot_axes  # update `axs` too
             else:
                 for ax in flat_axes:
@@ -674,8 +708,28 @@ class LivePlotWidget(QWidget):
             for label, _, handler in self.right_click_actions:
                 if label in self.checked_right_click_flags[key]:
                     handler(ax)
-        figure.tight_layout()
+        if relayout or self.current_plot_uses_axs is False or self._needs_layout:
+            figure.tight_layout()
+            self._needs_layout = False
+            self._laid_out_size = self.canvas.get_width_height()
         return axs
+
+    def _on_canvas_resize(self, _event):
+        self._needs_layout = True
+        self._relayout_timer.start()        # restarts while a resize is still going on
+
+    def _relayout_after_resize(self):
+        figure = self.canvas.figure
+        if not figure.axes or self._laid_out_size == self.canvas.get_width_height():
+            return                          # nothing drawn yet, or already laid out at this size
+        try:
+            figure.tight_layout()
+        except Exception as e:
+            logger.debug(f"tight_layout after resize failed: {e}")
+            return
+        self._needs_layout = False
+        self._laid_out_size = self.canvas.get_width_height()
+        self.canvas.draw_idle()
 
 
     def _update_progress_bar(self, completed_iter):
@@ -1047,7 +1101,9 @@ class LivePlotWidget(QWidget):
             return  # shouldn't happen
 
         key = (plot_name, ax_index)
-        menu = QMenu()
+        # Parented to the window: on Wayland a menu without a parent is attached to whichever
+        # window had focus last, and opens in the wrong place after a focus change.
+        menu = QMenu(self.window())
 
         for label, is_checkable, handler in self.right_click_actions:
             action = QAction(label, self)
@@ -1077,7 +1133,10 @@ class LivePlotWidget(QWidget):
 
             menu.addAction(action)
 
-        menu.exec_(QtGui.QCursor.pos())
+        gui_event = getattr(event, "guiEvent", None)        # at the click itself
+        menu.exec_(self.canvas.mapToGlobal(gui_event.pos()) if gui_event is not None
+                   else QtGui.QCursor.pos())
+        menu.deleteLater()      # the window owns it now
 
     def autoscale_ax(self, ax):
         # Autoscale line/plot data
@@ -1426,6 +1485,8 @@ class LivePlotWidget(QWidget):
         self.is_paused = False
         self.pause_button.setIcon(self._pause_icon)
         self.last_mtime = 0
+        self._needs_layout = True
+        self._fresh_load_mtime = None
 
         self.canvas.figure.clf()
         self.canvas.draw()

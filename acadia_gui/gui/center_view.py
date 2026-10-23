@@ -6,9 +6,10 @@ Exposes the same ``clear`` / ``load_images`` / ``set_theme`` interface as
 :class:`~.plot_view.FigureDisplayWidget`, so it drops into ``main_data_browser``
 in place of it -- the browser keeps calling the same three methods.
 
-The sequence view traces lazily: a folder selection refreshes the live view
-immediately but only marks the sequence view dirty, tracing it when the user
-actually switches to it (tracing costs ~0.1-0.3 s and folder clicks are frequent).
+Only the view on screen does work. A folder selection loads it into the visible view
+and marks the other one stale; that one loads when the user switches to it. Loading a
+run into the live view processes its data (seconds for a large run), and tracing costs
+~0.1-0.3 s, while folder clicks are frequent. The hidden live view also stops polling.
 """
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFontMetrics
@@ -48,6 +49,8 @@ class CenterView(QWidget):
         self._folder = None
         self._is_data_folder = True
         self._sequence_dirty = True      # sequence needs a (re)trace before showing
+        self._live_dirty = False         # live view shows another folder than self._folder
+        self._live_paused = False        # its poll timer was stopped when it was hidden
 
         self.stack = QStackedWidget()
         self.stack.insertWidget(LIVE, self.live)
@@ -112,9 +115,22 @@ class CenterView(QWidget):
         self.btn_live.setChecked(index == LIVE)
         self.btn_sequence.setChecked(index == SEQUENCE)
         self.stack.setCurrentIndex(index)
-        if index == SEQUENCE and self._sequence_dirty:
-            self.sequence.load_folder(self._folder)   # never raises
-            self._sequence_dirty = False
+        timer = self.live.live_plot.timer
+        if index == SEQUENCE:
+            if timer.isActive():            # no polling a run nobody is looking at
+                timer.stop()
+                self._live_paused = True
+            if self._sequence_dirty:
+                self.sequence.load_folder(self._folder)   # never raises
+                self._sequence_dirty = False
+        elif self._live_dirty:
+            self._live_paused = False
+            self._live_dirty = False
+            if self._folder:
+                self.live.load_images(self._folder, is_data_folder=self._is_data_folder)
+        elif self._live_paused:
+            self._live_paused = False
+            timer.start()                   # same folder: carry on where it left off
 
     # ---------------- FigureDisplayWidget-compatible interface ----------------
 
@@ -124,11 +140,14 @@ class CenterView(QWidget):
         self._is_data_folder = is_data_folder
         self._full_path = str(folder_path) if folder_path else ""
         self._update_path_label()
-        self.live.load_images(folder_path, is_data_folder=is_data_folder)
-        self._sequence_dirty = True
         if self.mode == SEQUENCE and self.sequence is not None:
             self.sequence.load_folder(folder_path)
             self._sequence_dirty = False
+            self.live.live_plot.stop()      # it would keep polling the previous run
+            self._live_dirty, self._live_paused = True, False
+        else:
+            self.live.load_images(folder_path, is_data_folder=is_data_folder)
+            self._sequence_dirty = True
 
     def clear(self):
         self.live.clear()
@@ -136,6 +155,7 @@ class CenterView(QWidget):
             self.sequence.clear()
         self._folder = None
         self._sequence_dirty = True
+        self._live_dirty = self._live_paused = False
         self._full_path = ""
         self._update_path_label()
 

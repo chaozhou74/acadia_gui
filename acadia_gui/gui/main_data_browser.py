@@ -52,6 +52,19 @@ class RightPanelTabs(QTabWidget):
         self.log_tab.clear()
 
 
+def _forget_position_on_wayland(window):
+    """Keep a restored window size but not its position, on Wayland.
+
+    A Wayland client cannot place its windows, so a position restored from saved settings is
+    never applied, yet Qt keeps assuming the window is there. Menus and other popups are then
+    computed from that assumed position and fitted to the screen first; a position saved on a
+    wider desktop (e.g. another monitor layout) put every menu at the left edge of the screen.
+    Qt assumes the origin for a window it never moved, which is what popups need.
+    """
+    if QApplication.platformName().startswith("wayland"):
+        window.move(0, 0)
+
+
 class DataBrowser(QMainWindow):
     def __init__(self, root_path: str, client_station=None, theme: str = None, logging_level=logging.DEBUG):
         """
@@ -269,6 +282,8 @@ class DataBrowser(QMainWindow):
         # maximized; the compositor controls placement on Wayland)
         if not want_maximized:
             self._ensure_on_screen()
+        for window in (self, self.log_window):
+            _forget_position_on_wayland(window)
 
     def save_ui_settings(self):
         s = QSettings("acadia", "DataBrowser")
@@ -289,8 +304,7 @@ class DataBrowser(QMainWindow):
 
     def shutdown(self):
         """Stop the timers and the folder-monitor thread (safe to call more than once). Child
-        widgets get no closeEvent, so without this the monitor thread was still running when
-        Python tore the app down: "QThread: Destroyed while thread is still running", abort."""
+        widgets get no closeEvent, so this is what stops them when the window closes."""
         self.folder_tree._pause_monitoring()      # keeps the auto-jump setting as it is
         self.center_view.live.live_plot.timer.stop()
         self.right_tabs.log_tab.timer.stop()

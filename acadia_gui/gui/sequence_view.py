@@ -17,7 +17,7 @@ a box to zoom, scroll to zoom about the cursor, shift-drag to pan, double-click 
 ``r`` to reset — so there is no matplotlib toolbar. Two scrollbars, enabled while zoomed in,
 walk the time axis and the lane stack at a fixed zoom and show where the window sits.
 """
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import (QCheckBox, QComboBox, QFormLayout, QGridLayout, QGroupBox,
                              QHBoxLayout, QLabel, QPushButton, QScrollArea, QScrollBar,
                              QSizePolicy, QSpinBox, QSplitter, QToolButton,
@@ -182,6 +182,7 @@ class SequenceWidget(QWidget):
 
         self._build_layout()
         self._connect()
+        QTimer.singleShot(0, self._fit_options)
 
     # ---------------- layout ----------------
 
@@ -243,12 +244,12 @@ class SequenceWidget(QWidget):
         column_widget = QWidget()
         column_widget.setLayout(column)
 
-        # scrollable so the column never overflows a short window; width is
-        # drag-resizable via the splitter below (min stops it vanishing there)
+        # scrolls vertically so the column never overflows a short window; it can be
+        # dragged wider via the splitter below, never narrower than its content
         self.options = QScrollArea()
         self.options.setWidgetResizable(True)
         self.options.setWidget(column_widget)
-        self.options.setMinimumWidth(140)
+        self.options.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
         # a thin full-height strip on the left edge collapses the options column
         # (no dedicated toggle row); the arrow points the way it will move
@@ -356,8 +357,17 @@ class SequenceWidget(QWidget):
         self._theme = DARK_THEME if dark else LIGHT_THEME
         if self.trace is not None:
             self._redraw()
+        QTimer.singleShot(0, self._fit_options)     # once the new stylesheet has applied
 
     # ---------------- internals ----------------
+
+    def _fit_options(self):
+        """Keep the options column at least as wide as its content plus a vertical
+        scrollbar, so no control is clipped; the content's width depends on the theme."""
+        need = (self.options.widget().minimumSizeHint().width()
+                + self.options.verticalScrollBar().sizeHint().width()
+                + 2 * self.options.frameWidth())
+        self.options.setMinimumWidth(need)
 
     def _set_status(self, message):
         self.status.setText(message or "")

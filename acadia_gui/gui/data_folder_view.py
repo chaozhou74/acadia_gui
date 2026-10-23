@@ -3,11 +3,11 @@ import subprocess
 import shutil
 from functools import wraps
 import logging
-from threading import Event
+from threading import Event, Thread
 import time
 from PyQt5.QtWidgets import (QWidget, QFileSystemModel, QTreeView, QVBoxLayout, QSizePolicy, QLineEdit, QLabel,
                              QPushButton, QFileDialog, QMenu, QApplication, QHBoxLayout, QMessageBox)
-from PyQt5.QtCore import Qt, QModelIndex, QDir, QUrl, QSortFilterProxyModel, QObject, pyqtSignal, QThread, QTimer
+from PyQt5.QtCore import Qt, QModelIndex, QDir, QUrl, QSortFilterProxyModel, QObject, pyqtSignal, QTimer
 from PyQt5.QtGui import QIcon, QDesktopServices, QColor, QBrush
 
 
@@ -121,6 +121,8 @@ class FolderMonitorWorker(QObject):
         but we do want to monitor nested fooder changes as well.
 
         How this works:
+        - On start (in ``run``, on the monitor thread), walk the whole root once to learn the
+          existing directories and data folders.
         - Keep a list of known directories and their mtimes.
         - On each tick, stat a round-robin batch.
         - If a dir’s mtime changed, we fully walk that branch:
@@ -142,8 +144,7 @@ class FolderMonitorWorker(QObject):
         self._dir_keys = []        # round-robin list of dirs to stat each tick
         self._dir_cursor = 0
         self.known_datafolders = set()
-
-        self._index_full_branch(self.root_path, emit=False)  # build initial dir state
+        self._failing = set()      # dirs whose last stat failed with an I/O error (logged once)
 
     def _index_full_branch(self, path, emit=False):
         """
@@ -179,6 +180,10 @@ class FolderMonitorWorker(QObject):
             except (FileNotFoundError, PermissionError):
                 dirnames[:] = []
                 continue
+            except OSError as e:       # e.g. a network share not answering: try again next pass
+                self._log_failure(dirpath, e)
+                dirnames[:] = []
+                continue
 
             if dirpath not in self.dir_state:
                 self.dir_state[dirpath] = {"mtime": st.st_mtime, "last_scan": 0.0}
@@ -209,6 +214,9 @@ class FolderMonitorWorker(QObject):
 
             try:
                 s = os.stat(d, follow_symlinks=False)
+                if d in self._failing:
+                    self._failing.discard(d)
+                    logger.info(f"Folder monitor: {d} answers again.")
                 if st["mtime"] != s.st_mtime:
                     # parent changed -> fully (re)index the branch and emit any new datafolders
                     st["mtime"] = s.st_mtime
@@ -217,6 +225,9 @@ class FolderMonitorWorker(QObject):
             except (FileNotFoundError, PermissionError):
                 # dropped; remove from state (lazy compact of _dir_keys later)
                 self.dir_state.pop(d, None)
+            except OSError as e:
+                # e.g. EIO / ESTALE from a network share: keep the dir and retry on the next pass
+                self._log_failure(d, e)
 
             i += 1
 
@@ -227,11 +238,20 @@ class FolderMonitorWorker(QObject):
             self._dir_keys = [k for k in self._dir_keys if k in self.dir_state]
             self._dir_cursor = (self._dir_cursor % len(self._dir_keys)) if self._dir_keys else 0
 
+    def _log_failure(self, path, error):
+        if path not in self._failing:
+            self._failing.add(path)
+            logger.warning(f"Folder monitor: cannot read {path} ({error}); will keep retrying.")
+
     def run(self):
         try:
+            self._index_full_branch(self.root_path, emit=False)  # build initial dir state
             while not self._stop_event.is_set():
-                self._scan_changed_dirs()
-                time.sleep(self.poll_interval)
+                try:
+                    self._scan_changed_dirs()
+                except Exception:
+                    logger.exception("Folder monitor: scan failed; continuing.")
+                self._stop_event.wait(self.poll_interval)
         finally:
             self.finished.emit()
 
@@ -559,13 +579,14 @@ class FolderTreeWidget(QWidget):
 
         if action:
             self.handle_context_action(action.text(), path)
+        menu.deleteLater()      # the window owns it now
 
     def get_context_actions(self, path):
         parent_dir = os.path.dirname(path)
         is_in_trash = os.path.basename(parent_dir) == TRASH_FOLDER_NAME
         is_trash = os.path.basename(path) == TRASH_FOLDER_NAME
 
-        menu = QMenu()
+        menu = QMenu(self.window())   # parented: see LivePlotWidget.handle_right_click
         menu.addAction("Open in File Explorer")
         menu.addAction("Copy Path")
 
@@ -884,10 +905,11 @@ class FolderTreeWidget(QWidget):
         """
         lock to always look at the most recent data folder
         """
-        menu = QMenu()
+        menu = QMenu(self.window())
         action_text = "Unlock auto-jump" if self.recent_lock_enabled else "Auto-jump to newest"
         action = menu.addAction(action_text)
         result = menu.exec_(self.recent_button.mapToGlobal(pos))
+        menu.deleteLater()
         if result == action:
             if self.recent_lock_enabled:
                 self.stop_monitoring()  # flips flag OFF
@@ -900,50 +922,40 @@ class FolderTreeWidget(QWidget):
     def start_monitoring(self):
         self.recent_lock_enabled = True
         # don’t start twice
-        if self.monitor_thread is not None and self.monitor_thread.isRunning():
+        if self.monitor_thread is not None and self.monitor_thread.is_alive():
             self._set_recent_lock_ui()
             return
 
-        # clear stale thread if present
-        if self.monitor_thread is not None and not self.monitor_thread.isRunning():
-            self.monitor_thread.deleteLater()
-            self.monitor_thread = None
-
-        thread = QThread(self)
+        # The monitor only reads (os.walk / os.stat), so it runs in a daemon thread: a stat stuck
+        # on a network share that stopped answering then cannot hold up closing the browser.
+        # New data folders reach the GUI thread through the (queued) signal.
         worker = FolderMonitorWorker(self.root_path)
-
-        worker.moveToThread(thread)
-
-        thread.started.connect(worker.run)
         worker.new_datafolder_found.connect(self.handle_new_datafolder)
-        worker.finished.connect(thread.quit)
-        worker.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-
-        def _clear_refs(t=thread):
-            # only clear if THIS thread is still the active one
-            if self.monitor_thread is t:
-                self.monitor_worker = None
-                self.monitor_thread = None
-                self._set_recent_lock_ui()
-
-        thread.finished.connect(_clear_refs)
-
+        thread = Thread(target=worker.run, name="acadia-folder-monitor", daemon=True)
         self.monitor_thread = thread
         self.monitor_worker = worker
-
         thread.start()
         self._set_recent_lock_ui()
 
-    def _pause_monitoring(self):
-        """Internal: stop threads without changing recent_lock_enabled."""
-        if self.monitor_worker is not None:
-            self.monitor_worker.stop()
-        if self.monitor_thread is not None:
-            self.monitor_thread.quit()
-            self.monitor_thread.wait()
+    def _pause_monitoring(self, timeout=1.0):
+        """Internal: stop the monitor without changing recent_lock_enabled. Waits at most
+        ``timeout`` s; a monitor still stuck in a stat after that ends by itself once the call
+        returns."""
+        worker, thread = self.monitor_worker, self.monitor_thread
         self.monitor_worker = None
         self.monitor_thread = None
+        if worker is not None:
+            worker.stop()
+        if thread is not None:
+            thread.join(timeout)
+            if thread.is_alive():
+                logger.warning("Folder monitor did not stop within %.1f s (a folder is not "
+                               "answering); leaving it to finish in the background.", timeout)
+                if worker is not None:
+                    try:
+                        worker.new_datafolder_found.disconnect(self.handle_new_datafolder)
+                    except TypeError:
+                        pass
 
     def stop_monitoring(self):
         """User intent: fully disable auto-jump."""
