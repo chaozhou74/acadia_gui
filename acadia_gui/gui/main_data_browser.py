@@ -96,6 +96,8 @@ class DataBrowser(QMainWindow):
         # --- Main GUI components ---
         self.folder_tree = FolderTreeWidget(root_path, self.on_folder_selected)
         self.center_view = CenterView()
+        self.center_view.live.live_plot.open_step.connect(self.folder_tree.set_task_step)
+        self._pending_open = None           # (folder, task id) waiting to be opened
         self.right_tabs = RightPanelTabs(client_station)
 
         # --- Right column: image + params ---
@@ -148,6 +150,32 @@ class DataBrowser(QMainWindow):
         self.move(x, y)
 
     def on_folder_selected(self, folder_path):
+        """Open a folder as a task of the folder tree (status row, busy cursor). Opening runs on
+        the GUI thread, which keeps the row's timer from firing, so the row is drawn first when
+        the run's data will be processed, and not at all for other folders, which open quickly.
+        The folder opens on the next pass of the event loop; a later click before that replaces
+        it."""
+        name = os.path.basename(os.path.normpath(folder_path))
+        processing = self.center_view.will_process(folder_path, is_datafolder(folder_path))
+        task_id = self.folder_tree.begin_task("open", f"Opening {name}",
+                                              show_after_ms=0 if processing else None)
+        self.folder_tree.draw_task_row()
+        self._pending_open = (folder_path, task_id)
+        QTimer.singleShot(0, self._open_pending_folder)
+
+    def _open_pending_folder(self):
+        if self._pending_open is None:
+            return
+        folder_path, task_id = self._pending_open
+        self._pending_open = None
+        if not self.folder_tree.task_is_current(task_id):
+            return
+        try:
+            self._open_folder(folder_path)
+        finally:
+            self.folder_tree.end_task(task_id)
+
+    def _open_folder(self, folder_path):
         self.center_view.clear()
         self.right_tabs.clear()
 

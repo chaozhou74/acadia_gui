@@ -149,6 +149,10 @@ class CenterView(QWidget):
             self.live.load_images(folder_path, is_data_folder=is_data_folder)
             self._sequence_dirty = True
 
+    def will_process(self, folder_path, is_data_folder=True):
+        """Whether ``load_images`` would process the run's data now (the live view is showing)."""
+        return self.mode != SEQUENCE and self.live.will_process(folder_path, is_data_folder)
+
     def clear(self):
         self.live.clear()
         if self.sequence is not None:

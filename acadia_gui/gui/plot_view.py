@@ -101,9 +101,7 @@ class FigureDisplayWidget(QWidget):
             whatever pictures they contain.
         """
         self.folder_path = folder_path
-        image_files = [f for f in os.listdir(folder_path)
-                       if f.lower().endswith(IMAGE_EXTENSIONS)]
-        self.png_paths = sorted(os.path.join(folder_path, f) for f in image_files)
+        self.png_paths = self._image_paths(folder_path)
         self._pixmaps = {}      # each click re-reads the folder's pictures, once
         self.figure_selector.clear()
 
@@ -120,6 +118,19 @@ class FigureDisplayWidget(QWidget):
             self.plot_live_mode()
         else:
             self.image_label.setText("No images to display")
+
+    @staticmethod
+    def _image_paths(folder_path):
+        return sorted(os.path.join(folder_path, f) for f in os.listdir(folder_path)
+                      if f.lower().endswith(IMAGE_EXTENSIONS))
+
+    def will_process(self, folder_path, is_data_folder=True):
+        """Whether ``load_images`` would open the live plot, which processes the run's data: a
+        data folder without pictures."""
+        try:
+            return is_data_folder and not self._image_paths(folder_path)
+        except OSError:
+            return False
 
     def plot_live_mode(self):
         if self.folder_path:

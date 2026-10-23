@@ -19,7 +19,7 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QWidgetAction, QMenu, QAction, QApplication, QToolButton, QPushButton,
     QProgressBar, QLineEdit, QLabel, QComboBox, QGroupBox, QGridLayout, QCheckBox, QSizePolicy, QFrame, QSlider
 )
-from PyQt5.QtCore import QTimer, Qt, QSize
+from PyQt5.QtCore import QTimer, Qt, QSize, pyqtSignal
 from PyQt5 import QtCore, QtGui
 from PyQt5.QtGui import QImage, QPainter, QFont, QIcon, QFontMetrics
 
@@ -203,6 +203,9 @@ def coalesce_calls(flag_name="_updating", pending_name="_pending_update", resche
 
 
 class LivePlotWidget(QWidget):
+    # step of opening a data folder: "loading", "processing", "plotting"
+    open_step = pyqtSignal(str)
+
     def __init__(self, poll_interval_sec=2, update_indicator_file=UPDATE_INDICATOR_FILE,
                  create_indicator_file=CREATE_INDICATOR_FILE):
         """
@@ -397,6 +400,7 @@ class LivePlotWidget(QWidget):
             logger.debug(f"No customizer method found in {self.runtime_class.__name__}, skipped.")
 
     def start(self, data_path):
+        self.open_step.emit("loading")
         self.data_path = data_path
         self._full_folder_path = data_path
         self._update_folder_label()
@@ -590,6 +594,7 @@ class LivePlotWidget(QWidget):
         if reprocess_data:
             try:
                 if self._fresh_load_mtime is not None:
+                    self.open_step.emit("processing")
                     # start() has just loaded the runtime and its data: process that rather than
                     # read it again. Its time stands as the last update, so data written since
                     # is picked up on the next poll.
@@ -642,6 +647,7 @@ class LivePlotWidget(QWidget):
             return
         if self.completed_iter is not None:
             try:
+                self.open_step.emit("plotting")
                 # Call plot into ax
                 axs = self.make_plot(self.canvas.figure, method_name, prepare_pcm=True,
                                      force_remake_axes=force, relayout=force or self._needs_layout)
