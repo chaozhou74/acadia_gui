@@ -14,11 +14,12 @@ widget instead of raising.
 Layout: a collapsible left column exposes every :func:`draw` option; the canvas
 fills the rest. Navigation (zoom/pan/reset) is the reused ``SequenceView`` — drag
 a box to zoom, scroll to zoom about the cursor, shift-drag to pan, double-click or
-``r`` to reset — so there is no matplotlib toolbar.
+``r`` to reset — so there is no matplotlib toolbar. Two scrollbars, enabled while zoomed in,
+walk the time axis and the lane stack at a fixed zoom and show where the window sits.
 """
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import (QCheckBox, QComboBox, QFormLayout, QGroupBox,
-                             QHBoxLayout, QLabel, QPushButton, QScrollArea,
+from PyQt5.QtWidgets import (QCheckBox, QComboBox, QFormLayout, QGridLayout, QGroupBox,
+                             QHBoxLayout, QLabel, QPushButton, QScrollArea, QScrollBar,
                              QSizePolicy, QSpinBox, QSplitter, QToolButton,
                              QVBoxLayout, QWidget)
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
@@ -26,6 +27,11 @@ from matplotlib.figure import Figure
 
 from acadia_qmsmt.sequence_viz import SequenceView, is_data_folder, trace_folder
 from acadia_qmsmt.sequence_viz.plotting import DARK_THEME, LIGHT_THEME, fit_layout
+
+
+# The lane bar counts in thousandths of a lane: QScrollBar is int-only, and this pans
+# continuously (the time bar counts in whole ns for the same reason).
+LANE_STEPS = 1000
 
 
 def _combo(items):
@@ -46,19 +52,37 @@ POINT_TIP = (
     "The runtime's sweep, flattened to 1D in its defined order (0 … N-1).")
 
 REGISTERS_TIP = (
-    "Values the hardware sets in real time (a register or DSP result) --\n"
-    "not always a length. Cache-fed ones resolve automatically per point;\n"
-    "for the rest, type in a value to preview the sequence for it.")
+    "Values the sequence sets while it runs, rather than when it is built.\n"
+    "Ones read from the cache fill themselves in per sweep point.\n"
+    "The rest are only known on the hardware -- type a value to see what\n"
+    "the sequence looks like for it, or leave it on 'auto'.")
 
 
 def _register_tip(entry):
-    """Per-row tooltip: settable vs auto-resolved."""
+    """Per-row tooltip, by what feeds the register and so what setting it does.
+
+    Leads with the raw ``REGn``/``DSPn`` whenever the row is shown under the runtime's
+    own variable name instead -- that id is what ``compiled.log`` and the assembled
+    program use, so it has to stay discoverable for anyone debugging against those.
+    """
     label = entry["label"]
-    if entry["settable"]:
-        return (f"{label}: set in real time, not at compile time.\n"
-                "Type in a value to preview the sequence for it.")
-    return (f"{label}: set in real time, read from the cache --\n"
-            "updates automatically per sweep point.")
+    if entry["alias"] != entry["name"]:
+        label = f"{label}  [{entry['name']}]"
+    if entry["resolution"] == "cache":
+        return (f"{label}\n\n"
+                "Read from the cache, so this already shows the real value.\n"
+                "It updates by itself when you change the sweep point.")
+    if entry["resolution"] == "device":
+        return (f"{label}\n\n"
+                "This value comes from a measurement, so it is not known here.\n"
+                "On 'auto', the plot picks one branch to show and says so.\n"
+                "Type a value to choose the branch yourself.\n"
+                "Set it back to 'auto' to clear what you typed.")
+    return (f"{label}\n\n"
+            "This length is set while the sequence runs, not when it is built.\n"
+            "On 'auto', the plot uses whatever it can work out.\n"
+            "Type a length in cycles to see the sequence with that value.\n"
+            "Set it back to 'auto' to clear what you typed.")
 
 
 class SequenceWidget(QWidget):
@@ -105,6 +129,7 @@ class SequenceWidget(QWidget):
             ("channel", "scale to the loudest pulse on each DAC"),
             ("shared", "scale to the loudest pulse anywhere"),
             ("absolute", "scale to DAC full scale")])
+        self.envelope_scale.setCurrentText("channel")   # default to a comparable scale
         self.envelope_mode = _combo([
             ("magnitude", "draw |s| — hides detune, phase and the DRAG quadrature"),
             ("iq", "draw I and Q about the lane centre — shows detune, phase, DRAG")])
@@ -125,7 +150,7 @@ class SequenceWidget(QWidget):
         self.show_branches = QCheckBox("control flow")
         self.show_branches.setChecked(True)
         self.legend = QCheckBox("legend")
-        self.legend.setChecked(True)
+        self.legend.setChecked(False)
         self.title = QCheckBox("title")
         self.title.setChecked(True)
 
@@ -137,6 +162,19 @@ class SequenceWidget(QWidget):
         # ---- canvas (no matplotlib toolbar; SequenceView handles zoom/pan) ----
         self.canvas = FigureCanvasQTAgg(Figure())
         self.canvas.setFocusPolicy(Qt.ClickFocus)   # so it receives key events
+
+        # ---- scrollbars: pan at a fixed zoom; the handle is the visible fraction ----
+        self.time_scroll = QScrollBar(Qt.Horizontal)       # in ns
+        self.time_scroll.setToolTip("Pan along the sequence at the current zoom.\n"
+                                    "Zoom with a drag-box or the wheel; double-click or 'r' resets.")
+        self.lane_scroll = QScrollBar(Qt.Vertical)         # in LANE_STEPS-ths of a lane, downwards
+        self.lane_scroll.setToolTip("Pan up and down the lanes at the current zoom.\n"
+                                    "Drag a tall box to zoom into a lane range.")
+        for bar in (self.time_scroll, self.lane_scroll):
+            bar.setEnabled(False)
+        # the view drives a bar (on_viewport / on_lanes) and the bar drives the view
+        # (valueChanged): these stop each echoing the other back
+        self._syncing_scroll = self._syncing_lanes = False
 
         # ---- status: errors / placeholder only, hidden when empty ----
         self.status = QLabel("Select a data folder to see its pulse sequence.")
@@ -225,8 +263,15 @@ class SequenceWidget(QWidget):
 
         # splitter so the options / canvas divider can be dragged to resize
         splitter = QSplitter(Qt.Horizontal)
+        plot = QWidget()
+        grid = QGridLayout(plot)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setSpacing(0)
+        grid.addWidget(self.canvas, 0, 0)
+        grid.addWidget(self.lane_scroll, 0, 1)
+        grid.addWidget(self.time_scroll, 1, 0)
         splitter.addWidget(self.options)
-        splitter.addWidget(self.canvas)
+        splitter.addWidget(plot)
         splitter.setStretchFactor(0, 0)     # options keep their size
         splitter.setStretchFactor(1, 1)     # canvas takes the slack
         splitter.setSizes([240, 900])
@@ -244,6 +289,8 @@ class SequenceWidget(QWidget):
         self.reset_button.clicked.connect(self._reset)
         self.jump.currentIndexChanged.connect(self._jump_to_block)
         self.point.valueChanged.connect(self._select_point)
+        self.time_scroll.valueChanged.connect(self._scroll_to)
+        self.lane_scroll.valueChanged.connect(self._scroll_lanes_to)
         for combo in (self.color_by, self.pulse_label, self.envelope_source,
                       self.envelope_scale, self.envelope_mode):
             combo.currentIndexChanged.connect(self._redraw)
@@ -297,6 +344,8 @@ class SequenceWidget(QWidget):
             self.view = None
         self.canvas.figure.clear()
         self.canvas.draw_idle()
+        for bar in (self.time_scroll, self.lane_scroll):
+            bar.setEnabled(False)
         self.jump.clear()
         self._build_registers()   # trace is None -> hides the panel
         self._set_status(message)
@@ -338,7 +387,10 @@ class SequenceWidget(QWidget):
         for entry in entries:
             name = entry["name"]
             tip = _register_tip(entry)
-            name_label = QLabel(name)            # a QLabel so its text is hoverable
+            # the row header shows the runtime's own variable name for this register
+            # (e.g. "rounds_reg"), not the internal "REG0" id -- see entry["alias"]
+            # and sequence_viz.tracing._variable_name_spy
+            name_label = QLabel(entry["alias"])  # a QLabel so its text is hoverable
             name_label.setToolTip(tip)
             if entry["settable"]:
                 field = self._register_input(entry, tip)
@@ -350,12 +402,20 @@ class SequenceWidget(QWidget):
         self.reg_group.setVisible(True)
 
     def _register_input(self, entry, tip):
-        """Spin box (in cycles) for a settable register/DSP-driven length."""
+        """Spin box for a settable register -- a register/DSP-driven length (in
+        cycles) or a device-fed register gating a ``test`` (the raw register word).
+
+        The minimum reads "auto" rather than 0, and means *no override*: the value is
+        left to resolve itself (a length falls back to the cache, a branch to the
+        mutually-exclusive/assumed default). Without that, a box showing 0 could not be
+        told apart from a deliberate pin to 0 -- which is exactly the interesting value
+        for a feedforward branch, where 0 and "not set" pick different arms.
+        """
         name = entry["name"]
         spin = QSpinBox()
-        spin.setRange(0, 10_000_000)
-        spin.setValue(int(self.trace.register_overrides.get(
-            name, entry["value_cycles"] or 0)))
+        spin.setRange(-1, 10_000_000)
+        spin.setSpecialValueText("auto")          # shown at the minimum, -1
+        spin.setValue(int(self.trace.register_overrides.get(name, -1)))
         spin.setToolTip(tip)
         spin.valueChanged.connect(lambda value, n=name: self._set_register(n, value))
         self._reg_spins[name] = spin
@@ -370,10 +430,17 @@ class SequenceWidget(QWidget):
                 else f"{entry['source']} → set per run")
 
     def _set_register(self, name, value):
-        """Pin a register/DSP-driven length; re-lay out in place (no re-trace)."""
+        """Pin a register, or clear the pin at "auto" (-1); re-lay out in place.
+
+        A device-fed register gates a ``test``, so changing one can add or remove whole
+        blocks from the timeline -- hence the full relayout, same as for a length.
+        """
         if self.trace is None:
             return
-        self.trace.register_overrides[name] = int(value)
+        if int(value) < 0:
+            self.trace.register_overrides.pop(name, None)
+        else:
+            self.trace.register_overrides[name] = int(value)
         self.trace.relayout()
         self._redraw()
         self._refresh_registers()
@@ -390,14 +457,20 @@ class SequenceWidget(QWidget):
     def _redraw(self):
         if self.trace is None:
             return
-        keep = self.view.xlim_ns if self.view is not None else None
+        # a draw option changes what is drawn, not where you look: keep both axes' windows
+        # (a time window covering the whole sequence is not kept, so it follows a new length)
+        keep = keep_lanes = None
         if self.view is not None:
+            keep_lanes = self.view.ylim
+            if self.view.xlim_ns != self.view.full_xlim:
+                keep = self.view.xlim_ns
             self.view.disconnect()
         figure = self.canvas.figure
         figure.clear()
         ax = figure.add_subplot(111)
         self.view = SequenceView(
             self.trace, ax,
+            on_viewport=self._sync_scroll, on_lanes=self._sync_lanes,
             group_copies=self.group_copies.isChecked(),
             label_pulses=self.label_pulses.isChecked(),
             pulse_label=self.pulse_label.currentText(),
@@ -413,10 +486,62 @@ class SequenceWidget(QWidget):
             envelope_mode=self.envelope_mode.currentText(),
             title=None if self.title.isChecked() else False,
             theme=self._theme)
-        if keep is not None:
-            self.view.set_window(*keep)
+        if keep is not None or keep_lanes is not None:
+            self.view.set_window(*(keep or self.view.full_xlim), ylim=keep_lanes)
         fit_layout(figure, ax)
         self.canvas.draw_idle()
+
+    # ---------------- scrollbars ----------------
+
+    def _sync_scroll(self, xlim_ns):
+        """Mirror the view's time window onto its bar (SequenceView's on_viewport)."""
+        if self.view is None or self.time_scroll.isSliderDown():
+            return              # mid-drag the render is the drag's own result: no echo
+        full_lo, full_hi = self.view.full_xlim
+        lo, hi = xlim_ns
+        span = max(hi - lo, 1e-9)
+        self._syncing_scroll = True
+        try:
+            self.time_scroll.setRange(int(full_lo), max(int(full_hi - span), int(full_lo)))
+            self.time_scroll.setPageStep(max(int(span), 1))
+            self.time_scroll.setSingleStep(max(int(span / 10), 1))
+            self.time_scroll.setValue(int(lo))
+            self.time_scroll.setEnabled(span < full_hi - full_lo - 1e-6)
+        finally:
+            self._syncing_scroll = False
+
+    def _scroll_to(self, value):
+        """Time bar moved: pan at the current zoom (throttled, a drag emits per pixel)."""
+        if self.view is None or self._syncing_scroll:
+            return
+        lo, hi = self.view.xlim_ns
+        self.view.set_window(float(value), float(value) + (hi - lo), throttle=True)
+
+    def _sync_lanes(self, ylim):
+        """Mirror the view's lane range onto its bar (SequenceView's on_lanes). Qt counts a
+        vertical bar downwards, so the value is how far the view's top sits below the stack's."""
+        if self.view is None or self.lane_scroll.isSliderDown():
+            return
+        full_lo, full_hi = self.view.full_ylim
+        low, high = ylim
+        span = max(high - low, 1e-9)
+        self._syncing_lanes = True
+        try:
+            self.lane_scroll.setRange(0, max(int(round((full_hi - full_lo - span) * LANE_STEPS)), 0))
+            self.lane_scroll.setPageStep(max(int(span * LANE_STEPS), 1))
+            self.lane_scroll.setSingleStep(max(int(span * LANE_STEPS / 10), 1))
+            self.lane_scroll.setValue(int(round((full_hi - high) * LANE_STEPS)))
+            self.lane_scroll.setEnabled(span < full_hi - full_lo - 1e-6)
+        finally:
+            self._syncing_lanes = False
+
+    def _scroll_lanes_to(self, value):
+        """Lane bar moved: pan up or down the stack at the current lane zoom."""
+        if self.view is None or self._syncing_lanes:
+            return
+        low, high = self.view.ylim or self.view.full_ylim
+        top = self.view.full_ylim[1] - value / LANE_STEPS
+        self.view.set_lanes(top - (high - low), top, throttle=True)
 
     def _populate_blocks(self):
         # Times live on placements (what executes); trace.blocks stay at 0.

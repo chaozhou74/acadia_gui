@@ -154,14 +154,16 @@ class AppMenuBar(QMenuBar):
         if self.parent_window is None:
             return "No parent window found."
 
+        center = getattr(self.parent_window, "center_view", None)   # live plots + sequence view
         components = {
             "FolderTreeWidget": getattr(self.parent_window, "folder_tree", None),
             "YamlViewer": getattr(self.parent_window.right_tabs, "config_yaml_tab", None),
             "KwargsJsonViewer": getattr(self.parent_window.right_tabs, "kwargs_json_tab", None),
             "InstrumentParamsViewer": getattr(self.parent_window.right_tabs, "instruments_tab", None),
             "LogViewer": getattr(self.parent_window.right_tabs, "log_tab", None),
-            "FigureDisplayWidget": getattr(self.parent_window, "figure_display", None),
-            "| - LivePlotWidget": getattr(self.parent_window.figure_display, "live_plot", None),
+            "FigureDisplayWidget": getattr(center, "live", None),
+            "| - LivePlotWidget": getattr(getattr(center, "live", None), "live_plot", None),
+            "SequenceWidget": getattr(center, "sequence", None),
             "\nTotal Tracked Memory": self # cause we gather all the objects here
         }
 

@@ -17,6 +17,7 @@ from acadia_gui.gui.center_view import CenterView
 from acadia_gui import THEME_PATH
 from acadia_gui.utils import set_qt_scaling, load_user_config, get_qt_scaling, update_user_config
 from acadia_gui.icons import ICON_PATH, set_icon_color, icon_color_for_theme
+from acadia_gui.safety import install_excepthook
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,7 @@ class DataBrowser(QMainWindow):
         """
 
         super().__init__()
+        install_excepthook()     # an error in one handler must not abort the whole browser
         self.setWindowTitle("Data Browser")
         self.resize(1600, 1000)
 
@@ -285,10 +287,21 @@ class DataBrowser(QMainWindow):
         # remember the data root so the next launch reopens it (see resolve_startup_root)
         update_user_config(last_root=self.folder_tree.root_path)
 
+    def shutdown(self):
+        """Stop the timers and the folder-monitor thread (safe to call more than once). Child
+        widgets get no closeEvent, so without this the monitor thread was still running when
+        Python tore the app down: "QThread: Destroyed while thread is still running", abort."""
+        self.folder_tree._pause_monitoring()      # keeps the auto-jump setting as it is
+        self.center_view.live.live_plot.timer.stop()
+        self.right_tabs.log_tab.timer.stop()
+
     def closeEvent(self, event):
         try:
             self.save_ui_settings()
+        except Exception as e:
+            logger.error(f"Failed to save UI settings: {e}", exc_info=True)
         finally:
+            self.shutdown()
             super().closeEvent(event)
 
 

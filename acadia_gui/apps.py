@@ -39,6 +39,7 @@ def launch_acadia_gui(root_path:str = None, instrument_station=None, dark_mode=F
     window.setWindowTitle(APP_NAME)
     window.setWindowIcon(get_icon("app_icon.svg", recolor=False))  # your icon file here
     window.show()
+    app.aboutToQuit.connect(window.shutdown)     # also on quit paths that skip closeEvent
     sys.exit(app.exec_())
 
 
