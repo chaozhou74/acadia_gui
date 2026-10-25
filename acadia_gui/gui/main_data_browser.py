@@ -6,10 +6,12 @@ import json
 
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QMainWindow, QVBoxLayout, QSplitter, QSizePolicy,
-    QTabWidget
+    QTabWidget, QTabBar
 )
 from PyQt5.QtCore import Qt, QTimer, QPoint, QSize, QRect, QSettings
+from PyQt5.QtGui import QPainter, QColor
 
+from acadia_gui.gui.instrument_parameter_view import load_colors
 from acadia_gui.gui import (LogViewer, InstrumentParamsViewer, YamlViewer,
                             FolderTreeWidget, is_datafolder,
                             AppMenuBar, KwargsJsonViewer, GuiLogWindow, GuiLogHandler)
@@ -26,9 +28,46 @@ def force_garbage_collect():
     collected = gc.collect()
 
 
+class HighlightTabBar(QTabBar):
+    """Tab bar that paints chosen tabs on a highlight background (e.g. a tab that is busy).
+    Drawn here because a theme stylesheet styles all tabs alike."""
+    def __init__(self):
+        super().__init__()
+        self._color = QColor()
+        self._text_color = QColor()
+        self._base = None
+        self._highlighted = set()
+
+    def set_colors(self, color, text_color, base=None):
+        """`color` may be see-through; it is then painted over `base` (the panel color)."""
+        self._color, self._text_color = QColor(color), QColor(text_color)
+        self._base = QColor(base) if base else None
+        self.update()
+
+    def set_highlighted(self, index, on):
+        (self._highlighted.add if on else self._highlighted.discard)(index)
+        self.update()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if not self._highlighted:
+            return
+        painter = QPainter(self)
+        for index in self._highlighted:
+            if 0 <= index < self.count():
+                rect = self.tabRect(index).adjusted(1, 1, -1, 0)
+                if self._base is not None:
+                    painter.fillRect(rect, self._base)
+                painter.fillRect(rect, self._color)
+                painter.setPen(self._text_color)
+                painter.drawText(rect, Qt.AlignCenter, self.tabText(index))
+        painter.end()
+
+
 class RightPanelTabs(QTabWidget):
     def __init__(self, client_station=None):
         super().__init__()
+        self.setTabBar(HighlightTabBar())
         self.config_yaml_tab = YamlViewer()
         self.instruments_tab = InstrumentParamsViewer(client_station)
         self.log_tab = LogViewer()
@@ -38,6 +77,14 @@ class RightPanelTabs(QTabWidget):
         self.addTab(self.kwargs_json_tab, "Kwargs")
         self.addTab(self.instruments_tab, "Instruments")
         self.addTab(self.log_tab, "Logs")
+        # the Instruments tab is highlighted while parameters are loading
+        self.instruments_tab.loading_changed.connect(
+            lambda loading: self.tabBar().set_highlighted(self.indexOf(self.instruments_tab), loading))
+
+    def set_theme(self, theme_name):
+        colors = load_colors(theme_name)
+        self.tabBar().set_colors(colors["loading"], colors["loading_text"], colors["pane"])
+        self.instruments_tab.set_theme(theme_name)
 
     def update_content(self, folder_path):
         self.instruments_tab.load_json(folder_path)
@@ -99,6 +146,7 @@ class DataBrowser(QMainWindow):
         self.center_view.live.live_plot.open_step.connect(self.folder_tree.set_task_step)
         self._pending_open = None           # (folder, task id) waiting to be opened
         self.right_tabs = RightPanelTabs(client_station)
+        self.right_tabs.instruments_tab.go_to_runtime.connect(self.go_to_folder)
 
         # --- Right column: image + params ---
         self.right_splitter = QSplitter(Qt.Horizontal)
@@ -163,6 +211,10 @@ class DataBrowser(QMainWindow):
         self._pending_open = (folder_path, task_id)
         QTimer.singleShot(0, self._open_pending_folder)
 
+    def go_to_folder(self, folder_path):
+        if not self.folder_tree.focus_path(folder_path):
+            logger.warning(f"Folder not found in the folder tree: {folder_path}")
+
     def _open_pending_folder(self):
         if self._pending_open is None:
             return
@@ -216,6 +268,7 @@ class DataBrowser(QMainWindow):
 
         # forward to central matplotlib plot
         self.center_view.set_theme(theme_name)
+        self.right_tabs.set_theme(theme_name)
 
     def showEvent(self, event):
         super().showEvent(event)

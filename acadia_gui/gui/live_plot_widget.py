@@ -202,6 +202,38 @@ def coalesce_calls(flag_name="_updating", pending_name="_pending_update", resche
     return deco
 
 
+class ThrottledCanvas(FigureCanvasQTAgg):
+    """
+    Canvas that renders at most once per `interval_ms` for redraw requests (`draw_idle`).
+
+    Opening a plot resizes the canvas several times while the input boxes settle, and the next
+    paint renders each resize's redraw request, so the plot was rendered 5-6 times per open.
+    Requests within `interval_ms` now give one render. `draw()` still renders right away.
+    """
+    def __init__(self, figure=None, interval_ms=50):
+        super().__init__(figure)
+        self._interval_ms = interval_ms
+        self._last_render = 0.0
+        self._idle_timer = QTimer(self)
+        self._idle_timer.setSingleShot(True)
+        self._idle_timer.timeout.connect(super().draw_idle)
+
+    def draw(self):
+        self._idle_timer.stop()     # this render serves the queued requests too
+        self._last_render = time.perf_counter()
+        super().draw()
+
+    def draw_idle(self):
+        # like matplotlib's own draw_idle, requests made during a render are dropped
+        if self._idle_timer.isActive() or getattr(self, "_is_drawing", False):
+            return
+        if QApplication.mouseButtons() != Qt.NoButton:     # pan, zoom, slider drags: full frame rate
+            super().draw_idle()
+            return
+        since_ms = (time.perf_counter() - self._last_render) * 1000
+        self._idle_timer.start(int(max(0, self._interval_ms - since_ms)))
+
+
 class LivePlotWidget(QWidget):
     # step of opening a data folder: "loading", "processing", "plotting"
     open_step = pyqtSignal(str)
@@ -266,7 +298,7 @@ class LivePlotWidget(QWidget):
         self.checked_right_click_flags = defaultdict(set)  # (plot_name, ax_index) → set of flags
 
         # --- Matplotlib figure/canvas ---
-        self.canvas = FigureCanvasQTAgg(Figure())
+        self.canvas = ThrottledCanvas(Figure())
         self.canvas.figure.set_facecolor("none") # will be set later
         self.toolbar = NavigationToolbar2QT(self.canvas, self)
         self.toolbar.setObjectName("livePlotToolBar")  # tags for styling with css
@@ -373,8 +405,11 @@ class LivePlotWidget(QWidget):
         self.setLayout(layout)
 
         # --- Timer for update ---
+        # single shot, restarted when an update ends: the poll interval is the wait between the
+        # end of one update and the start of the next, so slow processing leaves the window time
         self.timer = QTimer()
-        self.timer.timeout.connect(self.update_plot)
+        self.timer.setSingleShot(True)
+        self.timer.timeout.connect(self._poll)
 
         # --- Autoscale cache ----
         self._ax_state_before_action = {}  # (plot_name, ax_index, label) -> state dict
@@ -458,11 +493,18 @@ class LivePlotWidget(QWidget):
         self.select_plot(self.plot_selector.currentIndex())
         self.timer.start(self.poll_interval_ms)
 
+    def _poll(self):
+        try:
+            self.update_plot()
+        finally:
+            if self.ready:
+                self.timer.start(self.poll_interval_ms)
+
     def stop(self):
         self.timer.stop()
         self._fresh_load_mtime = None
         self.canvas.figure.clf()
-        self.canvas.draw()
+        self.canvas.draw_idle()
         self.ready = False
         self.completed_iter = None
 
@@ -560,7 +602,7 @@ class LivePlotWidget(QWidget):
             except Exception as e:
                 self.canvas.figure.clf()
                 logger.error(f"Error in making plot '{method_name}', {e}", exc_info=True)
-            self.canvas.draw()
+            self.canvas.draw_idle()
         else: # if we don't have data yet, redo data processing, then plot
             self.update_plot(force=True)
 

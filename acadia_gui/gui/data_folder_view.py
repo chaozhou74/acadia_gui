@@ -519,9 +519,16 @@ class FolderTreeWidget(QWidget):
         self.forward_button = QPushButton("→")
         self.forward_button.clicked.connect(self.go_forward)
         self.forward_button.setToolTip("Go forward to next viewed folder")
+        self.collapse_all_button = QPushButton()
+        self.collapse_all_button.clicked.connect(self.toggle_collapse_all)
+        self._collapsed = None      # (expanded folders, scroll position) before "collapse all"
+        self.tree.expanded.connect(self._forget_collapsed)
+        self._set_collapse_ui()
         button_row_lower = QHBoxLayout()
-        button_row_lower.addWidget(self.back_button)
-        button_row_lower.addWidget(self.forward_button)
+        button_row_lower.addWidget(self.back_button, 2)
+        button_row_lower.addWidget(self.forward_button, 2)
+        self.collapse_all_button.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+        button_row_lower.addWidget(self.collapse_all_button, 1)    # half as wide as an arrow
 
         # ----- status of the running task (jump, search, opening a folder) --------------
         self.task_label = QLabel()          # what runs, shortened to its width
@@ -767,6 +774,7 @@ class FolderTreeWidget(QWidget):
             # clear navigation history
             self.history = []
             self.history_index = -1
+            self._forget_collapsed()
 
             # resume monitoring if user had it enabled
             if was_enabled:
@@ -1130,7 +1138,60 @@ class FolderTreeWidget(QWidget):
         self.refresh_button.setIcon(get_icon("refresh.svg"))
         self.sort_mtime_button.setIcon(get_icon("sort_by_time.svg"))
         self.search_button.setIcon(get_icon("search.svg"))
+        self._set_collapse_ui()
         self._set_recent_lock_ui()  # recent button (lock state aware)
+
+    # -------------- collapse all folders / open them again ----------
+    def toggle_collapse_all(self):
+        """Collapse every expanded folder. The next click opens them again, unless a folder was
+        opened in between."""
+        if self._collapsed is None:
+            self._collapsed = (self._expanded_paths(), self.tree.verticalScrollBar().value())
+            current = self.tree.currentIndex()
+            self.tree.collapseAll()
+            self.last_expanded_path = None
+            if current.isValid():       # keep the selected folder's top-level folder in view
+                top = current
+                while top.parent().isValid() and top.parent() != self.tree.rootIndex():
+                    top = top.parent()
+                self.tree.scrollTo(top)
+            else:
+                self.tree.scrollToTop()
+        else:
+            paths, scroll = self._collapsed
+            self._collapsed = None
+            for path in paths:
+                index = self.path_to_proxy_index(path)
+                if index.isValid():
+                    self.tree.expand(index)
+            # the view lays out the opened folders later; scroll back after that
+            QTimer.singleShot(0, lambda: self.tree.verticalScrollBar().setValue(scroll))
+        self._set_collapse_ui()
+
+    def _expanded_paths(self):
+        """Paths of the expanded folders, each parent before its children."""
+        paths, parents = [], [self.tree.rootIndex()]
+        while parents:
+            parent = parents.pop()
+            for row in range(self.proxy_model.rowCount(parent)):
+                index = self.proxy_model.index(row, 0, parent)
+                if self.tree.isExpanded(index):
+                    paths.append(self.source_path_from_proxy_index(index))
+                    parents.append(index)
+        return paths
+
+    def _forget_collapsed(self, *_):
+        if self._collapsed is not None:
+            self._collapsed = None
+            self._set_collapse_ui()
+
+    def _set_collapse_ui(self):
+        if self._collapsed is None:
+            self.collapse_all_button.setIcon(get_icon("collapse_all.svg"))
+            self.collapse_all_button.setToolTip("Collapse all expanded folders")
+        else:
+            self.collapse_all_button.setIcon(get_icon("expand_all.svg"))
+            self.collapse_all_button.setToolTip("Open the collapsed folders again")
 
     # -------------- monitor and lock to the most recent folder ----------
     def _set_recent_lock_ui(self):
