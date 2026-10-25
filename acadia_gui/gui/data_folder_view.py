@@ -10,7 +10,7 @@ import time
 from PyQt5.QtWidgets import (QWidget, QFileSystemModel, QTreeView, QVBoxLayout, QSizePolicy, QLineEdit, QLabel,
                              QPushButton, QFileDialog, QMenu, QApplication, QHBoxLayout, QMessageBox,
                              QProgressBar, QToolButton, QGridLayout)
-from PyQt5.QtCore import Qt, QModelIndex, QDir, QUrl, QSortFilterProxyModel, QObject, pyqtSignal, QTimer
+from PyQt5.QtCore import Qt, QModelIndex, QPersistentModelIndex, QDir, QUrl, QSortFilterProxyModel, QObject, pyqtSignal, QTimer
 from PyQt5.QtGui import QIcon, QDesktopServices, QColor, QBrush
 
 
@@ -119,6 +119,10 @@ SCAN_THREADS = 8
 
 # a task's status row and busy cursor show only once it has run this long
 TASK_ROW_DELAY_MS = 500
+# keys that move through the folder tree open the folder reached after this pause, so holding a
+# key skims past folders without opening each one
+KEY_OPEN_DELAY_MS = 150
+KEY_OPEN_KEYS = (Qt.Key_Up, Qt.Key_Down, Qt.Key_PageUp, Qt.Key_PageDown, Qt.Key_Home, Qt.Key_End)
 
 
 def scan_threads_for(path):
@@ -404,12 +408,46 @@ class FolderMonitorWorker(QObject):
 class CustomTreeView(QTreeView):
     def __init__(self, parent_widget):
         """
-        Allows navigating with back and forward keys on the mouse
+        Allows navigating with back and forward keys on the mouse, and opens the folder that
+        Up / Down / PgUp / PgDn / Home / End move to (after KEY_OPEN_DELAY_MS). PgUp / PgDn go to
+        the first / last folder of the current level, Home / End to the first / last top folder.
         """
         super().__init__()
         self.folder_widget = parent_widget
+        self._key_open_timer = QTimer(self)
+        self._key_open_timer.setSingleShot(True)
+        self._key_open_timer.setInterval(KEY_OPEN_DELAY_MS)
+        self._key_open_timer.timeout.connect(self._open_key_target)
+        self._key_start = None          # folder current when the keys started moving
+
+    def keyPressEvent(self, event):
+        if event.key() not in KEY_OPEN_KEYS or event.modifiers() & ~Qt.KeypadModifier:
+            super().keyPressEvent(event)
+            return
+        if not self._key_open_timer.isActive():
+            self._key_start = QPersistentModelIndex(self.currentIndex())
+        super().keyPressEvent(event)
+        self._key_open_timer.start()
+
+    def moveCursor(self, action, modifiers):
+        model, current = self.model(), self.currentIndex()
+        if action in (QTreeView.MovePageUp, QTreeView.MovePageDown) and current.isValid():
+            parent = current.parent()
+            row = 0 if action == QTreeView.MovePageUp else model.rowCount(parent) - 1
+            return model.index(row, current.column(), parent)
+        if action in (QTreeView.MoveHome, QTreeView.MoveEnd):
+            n = model.rowCount(self.rootIndex())
+            if n:
+                return model.index(0 if action == QTreeView.MoveHome else n - 1, 0, self.rootIndex())
+        return super().moveCursor(action, modifiers)
+
+    def _open_key_target(self):
+        index = self.currentIndex()
+        if index.isValid() and self._key_start != index:
+            self.folder_widget.folder_selected(index)
 
     def mousePressEvent(self, event):
+        self._key_open_timer.stop()     # the click decides what opens
         if event.button() == Qt.XButton1:  # Back
             self.folder_widget.go_back()
             return
@@ -513,10 +551,10 @@ class FolderTreeWidget(QWidget):
         self.search_box_row.addWidget(self.next_match_button)
 
         # ----- bottom buttons --------------
-        self.back_button = QPushButton("←")
+        self.back_button = QPushButton(get_icon("backward.svg"), "")
         self.back_button.clicked.connect(self.go_back)
         self.back_button.setToolTip("Go back to previously viewed folder")
-        self.forward_button = QPushButton("→")
+        self.forward_button = QPushButton(get_icon("forward.svg"), "")
         self.forward_button.clicked.connect(self.go_forward)
         self.forward_button.setToolTip("Go forward to next viewed folder")
         self.collapse_all_button = QPushButton()
@@ -1138,6 +1176,8 @@ class FolderTreeWidget(QWidget):
         self.refresh_button.setIcon(get_icon("refresh.svg"))
         self.sort_mtime_button.setIcon(get_icon("sort_by_time.svg"))
         self.search_button.setIcon(get_icon("search.svg"))
+        self.back_button.setIcon(get_icon("backward.svg"))
+        self.forward_button.setIcon(get_icon("forward.svg"))
         self._set_collapse_ui()
         self._set_recent_lock_ui()  # recent button (lock state aware)
 

@@ -90,6 +90,19 @@ class FigureDisplayWidget(QWidget):
         self.folder_path = None
         self.load_pickle_button.setEnabled(False)
         self.switch_to_live_button.setEnabled(False)
+        self.setFocusPolicy(Qt.ClickFocus)     # a click on the plot or image takes the keys
+
+    def keyPressEvent(self, event):
+        # Up / Down step through the plots (or images) while the plot area has the keyboard focus;
+        # in the folder tree the same keys move between folders
+        step = {Qt.Key_Up: -1, Qt.Key_Down: 1}.get(event.key())
+        if step is None or not self.hasFocus():
+            super().keyPressEvent(event)
+            return
+        selector = self.figure_selector if self.stack.currentWidget() is self.png_view else self.live_plot.plot_selector
+        index = selector.currentIndex() + step
+        if 0 <= index < selector.count():
+            selector.setCurrentIndex(index)
 
     def load_images(self, folder_path, is_data_folder=True):
         """Display the images found in ``folder_path``.
