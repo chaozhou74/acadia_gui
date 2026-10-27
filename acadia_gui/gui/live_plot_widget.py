@@ -273,8 +273,7 @@ class LivePlotWidget(QWidget):
         self._full_folder_path = ""
         self.plot_axes = None
         self.last_axs_shape = None
-        # tight_layout is redone when the plot, its axes, the folder or the canvas size change
-        # and on user-forced updates, not on live updates that only bring new data
+        # tight_layout runs on every plot update (see make_plot); these track a resize after it
         self._needs_layout = True
         self._laid_out_size = None      # canvas size (px) the last tight_layout was done for
         # metadata.txt time of the data start() just loaded, while that runtime is still unused:
@@ -692,19 +691,18 @@ class LivePlotWidget(QWidget):
                 self.open_step.emit("plotting")
                 # Call plot into ax
                 axs = self.make_plot(self.canvas.figure, method_name, prepare_pcm=True,
-                                     force_remake_axes=force, relayout=force or self._needs_layout)
+                                     force_remake_axes=force)
                 self.canvas.draw()
             except Exception as e:
                 logger.error(f"Error making plot '{method_name}': {e}", exc_info=True)
 
 
-    def make_plot(self, figure: Figure, plot_method_name: str, prepare_pcm=False, force_remake_axes=False,
-                  relayout=True):
+    def make_plot(self, figure: Figure, plot_method_name: str, prepare_pcm=False, force_remake_axes=False):
         """
         make the plot with plot_method_name in the given figure
 
-        :param relayout: run `tight_layout`. Plots drawn with `fig=` clear the figure every time, so
-            they are always laid out; `axs=` plots keep their axes positions between live updates.
+        The figure is laid out (`tight_layout`) every time: each update draws new titles, labels and
+        tick labels, which need room the previous layout did not leave.
         """
         # get plot function
         plot_method = getattr(self.rt, plot_method_name)
@@ -756,10 +754,9 @@ class LivePlotWidget(QWidget):
             for label, _, handler in self.right_click_actions:
                 if label in self.checked_right_click_flags[key]:
                     handler(ax)
-        if relayout or self.current_plot_uses_axs is False or self._needs_layout:
-            figure.tight_layout()
-            self._needs_layout = False
-            self._laid_out_size = self.canvas.get_width_height()
+        figure.tight_layout()
+        self._needs_layout = False
+        self._laid_out_size = self.canvas.get_width_height()
         return axs
 
     def _on_canvas_resize(self, _event):

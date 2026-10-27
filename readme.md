@@ -121,6 +121,21 @@ To generate live plotting, the Runtime class must define:
 
 ---
 
+## Smoke test
+`tests/gui_smoke_test.py` clicks through every button and feature of the browser once (folder tree,
+keys, progress row, menus, live plot, side panels, instrument loading, SeeQuence) and checks crash,
+exit and stall cases. It works in a temporary directory with a temporary HOME, so it never touches
+your settings or data, and needs no pytest:
+```
+python tests/gui_smoke_test.py                        # generated demo runs, no data needed
+python tests/gui_smoke_test.py --runs RUN RUN ...     # copies of real runs as well
+python tests/gui_smoke_test.py --only keys,plots      # some sections only
+```
+It runs offscreen by default; set `QT_QPA_PLATFORM` (e.g. `wayland`) to run it on a display. The
+exit code is 0 when every check passed.
+
+---
+
 ## Trouble shooting
 -  **Error loading 'xcb' Plugin**
 

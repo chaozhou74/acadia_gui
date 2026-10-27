@@ -1,20 +1,26 @@
 import psutil
 import os
+import subprocess
 from pathlib import Path
 import logging
 
 
 from PyQt5.QtWidgets import QMenuBar, QAction, QLabel, QApplication, QTextEdit, QWidget, QVBoxLayout, QFrame, QToolButton, QHBoxLayout, QInputDialog, QMessageBox
-from PyQt5.QtCore import QTimer, Qt
-from PyQt5.QtGui import QIcon
+from PyQt5.QtCore import QTimer, Qt, QUrl
+from PyQt5.QtGui import QIcon, QDesktopServices
 
 
 from acadia_gui import THEME_PATH, CONFIG_PATH
 from acadia_gui.icons import get_icon
 from acadia_gui.utils import load_user_config, save_user_config
+from acadia_qmsmt.utils.path_adapter import detect_platform, to_windows_path
 
 MEM_THRES_MEDIUM = 3 # threshold for medium memory usage, in GB
 MEM_THRES_HIGH = 10 # threshold for high memory usage, in GB
+
+REPO_ROOT = Path(__file__).resolve().parents[2]     # the acadia_gui checkout (editable install)
+README_PATH = REPO_ROOT / "readme.md"
+WINDOWS_OPENER = "/mnt/c/Windows/explorer.exe"     # on WSL: opens with the Windows default app
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +29,36 @@ try:
 except Exception as e:
     logger.warning(f"Failed to load 'pympler' module: {e}; python object memory usage is not shown. ", exc_info=True)
     asizeof = None
+
+
+def _open_external(target, is_file):
+    """Open a file or URL with the system's default app. On WSL, Qt finds no launcher, so the
+    Windows default app is used through explorer.exe. Returns whether it was handed over."""
+    if detect_platform() == "wsl":
+        if not os.path.exists(WINDOWS_OPENER):
+            return False
+        try:
+            subprocess.Popen([WINDOWS_OPENER, to_windows_path(target) if is_file else target],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True      # explorer.exe exits with 1 even when it worked, so no exit check
+        except OSError as e:
+            logger.warning(f"Could not open {target} with explorer.exe: {e}")
+            return False
+    url = QUrl.fromLocalFile(target) if is_file else QUrl(target)
+    return QDesktopServices.openUrl(url)
+
+
+def _repo_url():
+    """The checkout's GitHub page (from its origin remote), or None."""
+    try:
+        url = subprocess.check_output(["git", "-C", str(REPO_ROOT), "config", "--get", "remote.origin.url"],
+                                      text=True, stderr=subprocess.DEVNULL, timeout=5).strip()
+    except Exception:
+        return None
+    if url.startswith("git@"):                                    # git@host:owner/repo.git
+        url = "https://" + url[len("git@"):].replace(":", "/", 1)
+    url = url[:-len(".git")] if url.endswith(".git") else url
+    return url if url.startswith("http") else None
 
 
 def count_qobjects():
@@ -51,7 +87,9 @@ class AppMenuBar(QMenuBar):
         # === Menus ===
         self.theme_menu = self.addMenu("Theme")
         self.view_menu = self.addMenu("View")
-        self.help_menu = self.addMenu("Help")
+        self.help_action = self.addAction("Help")
+        self.help_action.setToolTip("Open the acadia_gui readme")
+        self.help_action.triggered.connect(self.open_readme)
 
         self._load_themes()
         self.set_view_actions()
@@ -241,6 +279,17 @@ class AppMenuBar(QMenuBar):
         self.set_scaling_action.triggered.connect(self.change_gui_scaling)
         self.view_menu.addAction(self.set_scaling_action)
 
+
+    def open_readme(self):
+        """Open the readme with the system's default app for .md files, or else the repo's page
+        in the default browser; say where the readme is if neither opens."""
+        if README_PATH.is_file() and _open_external(str(README_PATH), is_file=True):
+            return
+        url = _repo_url()
+        if url and _open_external(url, is_file=False):
+            return
+        where = f"It is at:\n{README_PATH}" if README_PATH.is_file() else "It was not found next to the package."
+        QMessageBox.information(self, "Help", f"Could not open the acadia_gui readme. {where}")
 
     def change_gui_scaling(self):
         current_scale = float(self.config.get("scale_factor", "1.0"))
