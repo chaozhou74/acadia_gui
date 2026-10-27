@@ -2,12 +2,15 @@ import os
 import subprocess
 import shutil
 from functools import wraps
+import heapq
 import logging
-from threading import Event
+import queue
+from threading import Event, Lock, Thread
 import time
 from PyQt5.QtWidgets import (QWidget, QFileSystemModel, QTreeView, QVBoxLayout, QSizePolicy, QLineEdit, QLabel,
-                             QPushButton, QFileDialog, QMenu, QApplication, QHBoxLayout, QMessageBox)
-from PyQt5.QtCore import Qt, QModelIndex, QDir, QUrl, QSortFilterProxyModel, QObject, pyqtSignal, QThread, QTimer
+                             QPushButton, QFileDialog, QMenu, QApplication, QHBoxLayout, QMessageBox,
+                             QProgressBar, QToolButton, QGridLayout)
+from PyQt5.QtCore import Qt, QModelIndex, QPersistentModelIndex, QDir, QUrl, QSortFilterProxyModel, QObject, pyqtSignal, QTimer
 from PyQt5.QtGui import QIcon, QDesktopServices, QColor, QBrush
 
 
@@ -109,129 +112,250 @@ def update_explorer_after_trash(func):
 
 
 
+# file systems where each request is a network round trip: there, listings run in parallel
+NETWORK_FILESYSTEMS = {"nfs", "nfs4", "cifs", "smb3", "smbfs", "9p", "v9fs", "drvfs", "fuse.sshfs",
+                       "ceph", "glusterfs", "afs"}
+SCAN_THREADS = 8
+
+# a task's status row and busy cursor show only once it has run this long
+TASK_ROW_DELAY_MS = 500
+# keys that move through the folder tree open the folder reached after this pause, so holding a
+# key skims past folders without opening each one
+KEY_OPEN_DELAY_MS = 150
+KEY_OPEN_KEYS = (Qt.Key_Up, Qt.Key_Down, Qt.Key_PageUp, Qt.Key_PageDown, Qt.Key_Home, Qt.Key_End)
+
+
+def scan_threads_for(path):
+    """Threads to use for walking `path`: SCAN_THREADS on a network share, where parallel requests
+    overlap their round trips; 1 on a local disk, where answers are fast enough that handing work
+    between threads costs more than it saves. Unknown counts as a network share."""
+    try:
+        real, best, fstype = os.path.realpath(path), "", None
+        with open("/proc/mounts") as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) > 2:
+                    mount = parts[1].replace("\\040", " ")
+                    # longest mount point wins; for the same one the later line (mounted on top,
+                    # e.g. an NFS mount over its automount point) wins
+                    if (real == mount or real.startswith(mount.rstrip("/") + "/")) and len(mount) >= len(best):
+                        best, fstype = mount, parts[2]
+        if fstype is not None:
+            return SCAN_THREADS if fstype in NETWORK_FILESYSTEMS else 1
+    except OSError:
+        pass
+    return SCAN_THREADS
+
+
+def _list_folder(path, skip_trash=True):
+    """One folder's subfolders {path: mtime} and data folders {path: run.py mtime}, or None if
+    it cannot be read now. One listing, plus one stat of each subfolder's run.py, which both
+    tells a data folder apart and gives its time (the jump-to-newest order). Trash folders are
+    left out unless ``skip_trash`` is False."""
+    subs, runs = {}, {}
+    try:
+        with os.scandir(path) as it:
+            entries = [e for e in it if (e.name != TRASH_FOLDER_NAME or not skip_trash)
+                       and e.is_dir(follow_symlinks=False)]
+    except FileNotFoundError:
+        return subs, runs
+    except OSError:
+        return None
+    for e in entries:
+        try:
+            runs[e.path] = os.stat(os.path.join(e.path, DATAFOLDER_INDICATOR_FILE)).st_mtime
+        except FileNotFoundError:
+            try:
+                subs[e.path] = e.stat(follow_symlinks=False).st_mtime
+            except OSError:
+                subs[e.path] = None
+        except OSError:
+            subs[e.path] = None          # not answering now: kept, and checked again later
+    return subs, runs
+
+
+def scan_tree(root, threads=None, stop_event=None, skip_trash=True):
+    """Walk `root` once: ({data folder: run.py mtime}, {other folder: mtime or None}, [folders
+    that could not be read]). Data folders are not descended into, nor Trash folders unless
+    ``skip_trash`` is False. With several threads the listings run in parallel on daemon
+    threads, so a request stuck on a dead share never holds up closing the program."""
+    threads = threads or scan_threads_for(root)
+    runs, folders, failed = {}, {}, []
+    try:
+        folders[root] = os.stat(root).st_mtime
+    except OSError:
+        return runs, folders, [root]
+
+    def take(path, result):
+        if result is None:
+            failed.append(path)
+            return []
+        subs, found = result
+        runs.update(found)
+        folders.update(subs)
+        return list(subs)
+
+    if threads <= 1:
+        stack = [root]
+        while stack and not (stop_event and stop_event.is_set()):
+            path = stack.pop()
+            stack.extend(take(path, _list_folder(path, skip_trash)))
+        return runs, folders, failed
+
+    todo, lock, done = queue.Queue(), Lock(), Event()
+    pending = [1]
+    todo.put(root)
+
+    def worker():
+        while True:
+            path = todo.get()
+            if path is None:
+                return
+            result = _list_folder(path, skip_trash)
+            with lock:
+                subs = take(path, result)
+                pending[0] += len(subs) - 1
+                for sub in subs:
+                    todo.put(sub)
+                if pending[0] == 0:
+                    done.set()
+
+    workers = [Thread(target=worker, name="acadia-folder-scan", daemon=True) for _ in range(threads)]
+    for w in workers:
+        w.start()
+    while not done.wait(0.1):
+        if stop_event is not None and stop_event.is_set():
+            break
+    for _ in workers:
+        todo.put(None)
+    return runs, folders, failed
+
+
 class FolderMonitorWorker(QObject):
+    """Polls the data tree for new data folders (auto-jump to newest).
+
+    Qt's own file watcher is not used: it only watches what the tree has loaded, and on a
+    network share it does not see changes made by other machines anyway.
+
+    How this works:
+    - On start (in ``run``, on the monitor thread), walk the whole root once (``scan_tree``) to
+      learn the existing folders and data folders.
+    - A new data folder changes the modification time of the folder it appears in, so every
+      known folder is re-checked on its own schedule, by how recently it changed: within
+      ``HOT_AGE`` every ``HOT_S``, within ``WARM_AGE`` every ``WARM_S``, else every ``COLD_S``.
+      A folder that changes becomes hot. Re-checks are one stat each, on this thread.
+    - A folder that changed is re-walked (``scan_tree``); data folders found there are reported.
+    - A folder that cannot be read (e.g. a network share not answering) is kept and retried.
+    """
     new_datafolder_found = pyqtSignal(str)
     finished = pyqtSignal()
 
-    def __init__(self, root_path, poll_interval=0.3, stat_batch=4000):
+    HOT_S, WARM_S, COLD_S = 0.5, 2.0, 5.0
+    HOT_AGE, WARM_AGE = 3 * 24 * 3600, 30 * 24 * 3600
+    TICK_S = 0.1
+
+    def __init__(self, root_path, threads=None):
         """
-        Polling monitor for new data folders.
-
-        We are not using the Qt built-in monitor because it uses lazy loading,
-        but we do want to monitor nested fooder changes as well.
-
-        How this works:
-        - Keep a list of known directories and their mtimes.
-        - On each tick, stat a round-robin batch.
-        - If a dir’s mtime changed, we fully walk that branch:
-            - If we see a datafolder, emit once and prune its children.
-            - Otherwise, add any new subdirs to tracking.
-
         :param root_path: root directory to monitor
-        :param poll_interval: interval between scans, in seconds
-        :param stat_batch: how many dirs to stat per tick
+        :param threads: threads for walking; default from ``scan_threads_for(root_path)``
         """
         super().__init__()
         self.root_path = os.path.abspath(root_path)
-        self.poll_interval = poll_interval
-        self.stat_batch = stat_batch
+        self.threads = threads
         self._stop_event = Event()
 
-        # Tracking
-        self.dir_state = {}        # path -> {"mtime": float, "last_scan": float}
-        self._dir_keys = []        # round-robin list of dirs to stat each tick
-        self._dir_cursor = 0
+        self.dir_state = {}           # folder -> mtime (None until it could be read)
         self.known_datafolders = set()
+        self._next_check = {}         # folder -> time of its next check (monotonic)
+        self._due = []                # heap of (time, folder); entries replaced since are skipped
+        self._failures = 0            # failed checks since the share last answered
+        self.walk_done = False        # the first walk has finished
 
-        self._index_full_branch(self.root_path, emit=False)  # build initial dir state
+    def _schedule(self, path, mtime, now):
+        if mtime is None:
+            interval = self.HOT_S
+        else:
+            age = time.time() - mtime
+            interval = self.HOT_S if age < self.HOT_AGE else self.WARM_S if age < self.WARM_AGE else self.COLD_S
+        when = now + interval
+        self._next_check[path] = when
+        heapq.heappush(self._due, (when, path))
 
-    def _index_full_branch(self, path, emit=False):
-        """
-        Stat a batch of dirs. If a dir changed, re-walk that branch (emit=True).
-        """
-        logger.debug(f"Inspecting existing data folders under {path}...")
-        for dirpath, dirnames, _ in os.walk(path, topdown=True):
+    def _take_scan(self, scan, report, now):
+        runs, folders, failed = scan
+        for path in runs:
+            if path not in self.known_datafolders:
+                self.known_datafolders.add(path)
+                if report:
+                    self.new_datafolder_found.emit(path)
+        for path, mtime in folders.items():
+            if self.dir_state.get(path, -1) != mtime:
+                self.dir_state[path] = mtime
+                self._schedule(path, mtime, now)
+        for path in failed:
+            self._failed(path, None)
+            if path not in self.dir_state:
+                self.dir_state[path] = None
+                self._schedule(path, None, now)
+
+    def _failed(self, path, error):
+        if self._failures == 0:
+            logger.warning(f"Folder monitor: cannot read {path} ({error}); will keep retrying "
+                           f"(further failures are not logged until the folders answer again).")
+        self._failures += 1
+
+    def _check_due(self):
+        now = time.monotonic()
+        due = []
+        while self._due and self._due[0][0] <= now:
+            when, path = heapq.heappop(self._due)
+            if self._next_check.get(path) == when:
+                due.append(path)
+        changed = []
+        for path in due:
             if self._stop_event.is_set():
-                dirnames[:] = []  # prune children
-                break  # stop walking this branch
-
-            # Skip Trash folders entirely
-            if os.path.basename(dirpath) == TRASH_FOLDER_NAME:
-                dirnames[:] = []  # prune children
-                continue
-
-            # If we already know it's a datafolder, prune subtree
-            if dirpath in self.known_datafolders:
-                dirnames[:] = []
-                continue
-
-            if is_datafolder(dirpath):
-                if dirpath not in self.known_datafolders:
-                    self.known_datafolders.add(dirpath)
-                    if emit:
-                        self.new_datafolder_found.emit(dirpath)
-                dirnames[:] = []  # prune children of a datafolder
-                continue
-
-            # Track this directory
+                return
             try:
-                st = os.stat(dirpath, follow_symlinks=False)
+                mtime = os.stat(path, follow_symlinks=False).st_mtime
             except (FileNotFoundError, PermissionError):
-                dirnames[:] = []
+                self.dir_state.pop(path, None)
+                self._next_check.pop(path, None)
                 continue
-
-            if dirpath not in self.dir_state:
-                self.dir_state[dirpath] = {"mtime": st.st_mtime, "last_scan": 0.0}
-                self._dir_keys.append(dirpath)
-            else:
-                # keep mtime fresh if we walked due to a parent change
-                self.dir_state[dirpath]["mtime"] = st.st_mtime
-        logger.debug(f"Done inspecting data folders under {path}.")
-
-    def _scan_changed_dirs(self):
-        """
-        Round-robin stat a batch. For any dir whose mtime changed,
-        walk the FULL branch rooted at that dir (emit=True).
-        """
-        if not self._dir_keys:
-            return
-
-        n = len(self._dir_keys)
-        end = self._dir_cursor + min(self.stat_batch, n)
-        i = self._dir_cursor
-
-        while i < end and not self._stop_event.is_set():
-            d = self._dir_keys[i % n]
-            st = self.dir_state.get(d)
-            if st is None:
-                i += 1
+            except OSError as e:          # e.g. EIO / ESTALE from a network share
+                self._failed(path, e)
+                self._schedule(path, self.dir_state.get(path), now)
                 continue
-
-            try:
-                s = os.stat(d, follow_symlinks=False)
-                if st["mtime"] != s.st_mtime:
-                    # parent changed -> fully (re)index the branch and emit any new datafolders
-                    st["mtime"] = s.st_mtime
-                    self._index_full_branch(d, emit=True)
-                st["last_scan"] = time.time()
-            except (FileNotFoundError, PermissionError):
-                # dropped; remove from state (lazy compact of _dir_keys later)
-                self.dir_state.pop(d, None)
-
-            i += 1
-
-        self._dir_cursor = (i % max(1, n))
-
-        # Light compaction of _dir_keys if many paths were removed
-        if len(self._dir_keys) > max(1, int(len(self.dir_state) * 1.2)):
-            self._dir_keys = [k for k in self._dir_keys if k in self.dir_state]
-            self._dir_cursor = (self._dir_cursor % len(self._dir_keys)) if self._dir_keys else 0
+            if self._failures:
+                logger.info(f"Folder monitor: the folders answer again ({self._failures} failed checks).")
+                self._failures = 0
+            if mtime != self.dir_state.get(path):
+                changed.append(path)
+            self.dir_state[path] = mtime
+            self._schedule(path, mtime, now)
+        for path in changed:
+            if os.path.isfile(os.path.join(path, DATAFOLDER_INDICATOR_FILE)):
+                # a folder that was empty when first seen and has since become a data folder
+                self.dir_state.pop(path, None)
+                self._next_check.pop(path, None)
+                if path not in self.known_datafolders:
+                    self.known_datafolders.add(path)
+                    self.new_datafolder_found.emit(path)
+                continue
+            self._take_scan(scan_tree(path, self.threads, self._stop_event), report=True,
+                            now=time.monotonic())
 
     def run(self):
         try:
+            self.threads = self.threads or scan_threads_for(self.root_path)
+            self._take_scan(scan_tree(self.root_path, self.threads, self._stop_event), report=False,
+                            now=time.monotonic())
+            self.walk_done = True
             while not self._stop_event.is_set():
-                self._scan_changed_dirs()
-                time.sleep(self.poll_interval)
+                try:
+                    self._check_due()
+                except Exception:
+                    logger.exception("Folder monitor: check failed; continuing.")
+                self._stop_event.wait(self.TICK_S)
         finally:
             self.finished.emit()
 
@@ -286,12 +410,46 @@ class FolderMonitorWorker(QObject):
 class CustomTreeView(QTreeView):
     def __init__(self, parent_widget):
         """
-        Allows navigating with back and forward keys on the mouse
+        Allows navigating with back and forward keys on the mouse, and opens the folder that
+        Up / Down / PgUp / PgDn / Home / End move to (after KEY_OPEN_DELAY_MS). PgUp / PgDn go to
+        the first / last folder of the current level, Home / End to the first / last top folder.
         """
         super().__init__()
         self.folder_widget = parent_widget
+        self._key_open_timer = QTimer(self)
+        self._key_open_timer.setSingleShot(True)
+        self._key_open_timer.setInterval(KEY_OPEN_DELAY_MS)
+        self._key_open_timer.timeout.connect(self._open_key_target)
+        self._key_start = None          # folder current when the keys started moving
+
+    def keyPressEvent(self, event):
+        if event.key() not in KEY_OPEN_KEYS or event.modifiers() & ~Qt.KeypadModifier:
+            super().keyPressEvent(event)
+            return
+        if not self._key_open_timer.isActive():
+            self._key_start = QPersistentModelIndex(self.currentIndex())
+        super().keyPressEvent(event)
+        self._key_open_timer.start()
+
+    def moveCursor(self, action, modifiers):
+        model, current = self.model(), self.currentIndex()
+        if action in (QTreeView.MovePageUp, QTreeView.MovePageDown) and current.isValid():
+            parent = current.parent()
+            row = 0 if action == QTreeView.MovePageUp else model.rowCount(parent) - 1
+            return model.index(row, current.column(), parent)
+        if action in (QTreeView.MoveHome, QTreeView.MoveEnd):
+            n = model.rowCount(self.rootIndex())
+            if n:
+                return model.index(0 if action == QTreeView.MoveHome else n - 1, 0, self.rootIndex())
+        return super().moveCursor(action, modifiers)
+
+    def _open_key_target(self):
+        index = self.currentIndex()
+        if index.isValid() and self._key_start != index:
+            self.folder_widget.folder_selected(index)
 
     def mousePressEvent(self, event):
+        self._key_open_timer.stop()     # the click decides what opens
         if event.button() == Qt.XButton1:  # Back
             self.folder_widget.go_back()
             return
@@ -302,6 +460,11 @@ class CustomTreeView(QTreeView):
 
 
 class FolderTreeWidget(QWidget):
+    # results of the background walks, for the GUI thread: (task id, newest data folder or "")
+    # and (task id, search text, matching folders)
+    _newest_found = pyqtSignal(int, str)
+    _search_found = pyqtSignal(int, str, object)
+
     def __init__(self, root_path, on_select_callback):
         super().__init__()
         self.root_path = root_path
@@ -390,21 +553,69 @@ class FolderTreeWidget(QWidget):
         self.search_box_row.addWidget(self.next_match_button)
 
         # ----- bottom buttons --------------
-        self.back_button = QPushButton("←")
+        self.back_button = QPushButton(get_icon("backward.svg"), "")
         self.back_button.clicked.connect(self.go_back)
         self.back_button.setToolTip("Go back to previously viewed folder")
-        self.forward_button = QPushButton("→")
+        self.forward_button = QPushButton(get_icon("forward.svg"), "")
         self.forward_button.clicked.connect(self.go_forward)
         self.forward_button.setToolTip("Go forward to next viewed folder")
+        self.collapse_all_button = QPushButton()
+        self.collapse_all_button.clicked.connect(self.toggle_collapse_all)
+        self._collapsed = None      # (expanded folders, scroll position) before "collapse all"
+        self.tree.expanded.connect(self._forget_collapsed)
+        self._set_collapse_ui()
         button_row_lower = QHBoxLayout()
-        button_row_lower.addWidget(self.back_button)
-        button_row_lower.addWidget(self.forward_button)
+        button_row_lower.addWidget(self.back_button, 2)
+        button_row_lower.addWidget(self.forward_button, 2)
+        self.collapse_all_button.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+        button_row_lower.addWidget(self.collapse_all_button, 1)    # half as wide as an arrow
+
+        # ----- status of the running task (jump, search, opening a folder) --------------
+        self.task_label = QLabel()          # what runs, shortened to its width
+        self.task_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.task_time_label = QLabel()     # elapsed time
+        self.task_step_label = QLabel()     # step of opening a folder
+        self.task_abort_button = QToolButton()
+        self.task_abort_button.setText("×")
+        self.task_abort_button.setToolTip("Stop")
+        self.task_abort_button.setAutoRaise(True)
+        self.task_abort_button.clicked.connect(self.cancel_task)
+        self.task_bar = QProgressBar()
+        self.task_bar.setRange(0, 0)            # busy: the length of a task is not known
+        self.task_bar.setTextVisible(False)
+        self.task_bar.setMaximumHeight(6)
+        self.task_row = QWidget()
+        task_layout = QGridLayout(self.task_row)
+        task_layout.setContentsMargins(0, 0, 0, 0)
+        task_layout.setVerticalSpacing(1)
+        task_layout.addWidget(self.task_label, 0, 0)
+        task_layout.addWidget(self.task_time_label, 0, 1)
+        task_layout.addWidget(self.task_step_label, 1, 0, 1, 2)
+        task_layout.addWidget(self.task_bar, 2, 0, 1, 2)
+        task_layout.addWidget(self.task_abort_button, 0, 2, 3, 1)
+        self.task_step_label.setVisible(False)
+        task_layout.setColumnStretch(0, 1)
+        self.task_row.setVisible(False)
+
+        self._task_id = 0                   # id of the running task; results of older ones are dropped
+        self._task_kind = None              # (kind, text) of the running task, None when idle
+        self._task_stop = None              # stop event of the running walk
+        self._task_t0 = 0.0
+        self._busy_cursor = False
+        self._task_show_timer = QTimer(self)    # the row shows only for tasks that take a while
+        self._task_show_timer.setSingleShot(True)
+        self._task_show_timer.timeout.connect(self._show_task_row)
+        self._task_tick_timer = QTimer(self)    # elapsed time
+        self._task_tick_timer.setInterval(100)
+        self._task_tick_timer.timeout.connect(self._update_task_label)
+        self._task_step = ""
 
 
         layout = QVBoxLayout(self)
         layout.addLayout(button_row_upper)
         layout.addLayout(self.search_box_row)
         layout.addWidget(self.tree)
+        layout.addWidget(self.task_row)
         layout.addLayout(button_row_lower)
         layout.setContentsMargins(2, 2, 2, 2)
         layout.setSpacing(4)
@@ -426,6 +637,8 @@ class FolderTreeWidget(QWidget):
         # most recent folder monitoring
         self.monitor_worker = None
         self.monitor_thread = None
+        self._newest_found.connect(self._on_newest_found)
+        self._search_found.connect(self._on_search_found)
         self.destroyed.connect(self.stop_monitoring)
 
         # restore the persisted auto-jump-to-newest preference
@@ -477,6 +690,92 @@ class FolderTreeWidget(QWidget):
         return True
 
 
+    # ---------- the running task ----------
+    def begin_task(self, kind, text, stop_event=None, show_after_ms=None):
+        """Start a task that changes the view (jump to newest, search, opening a folder). Only one
+        runs at a time and the latest one wins: the running task is stopped and its result
+        dropped. Its status row and the busy cursor show after `show_after_ms` (default
+        TASK_ROW_DELAY_MS), with the elapsed time and a stop button (only when there is a
+        `stop_event` to set). Returns the task id."""
+        self.cancel_task()
+        self._task_kind = (kind, text)
+        self._task_stop = stop_event
+        self._task_t0 = time.monotonic()
+        self._task_step = ""
+        self.task_abort_button.setEnabled(stop_event is not None)
+        if show_after_ms is None:
+            show_after_ms = TASK_ROW_DELAY_MS
+        if show_after_ms > 0:
+            self._task_show_timer.start(show_after_ms)
+        else:
+            self._show_task_row()
+        return self._task_id
+
+    def task_running(self, kind=None, text=None):
+        return self._task_kind is not None and (kind is None or self._task_kind == (kind, text))
+
+    def task_is_current(self, task_id):
+        return self._task_kind is not None and task_id == self._task_id
+
+    def set_task_step(self, step):
+        """Show the current step of opening a folder. Drawn at once, because the step may be
+        followed by work that keeps the GUI thread busy."""
+        if self._task_kind is None or self._task_kind[0] != "open":
+            return
+        self._task_step = step
+        if self.task_row.isVisible():
+            self._update_task_label()
+            self.task_row.repaint()
+
+    def end_task(self, task_id):
+        if self.task_is_current(task_id):
+            self._finish_task()
+
+    def cancel_task(self):
+        """Stop the running task: the stop button, or another click that changes the view."""
+        if self._task_stop is not None:
+            self._task_stop.set()
+        self._finish_task()
+
+    def _finish_task(self):
+        self._task_id += 1
+        self._task_kind = None
+        self._task_stop = None
+        self._task_show_timer.stop()
+        self._task_tick_timer.stop()
+        self.task_row.setVisible(False)
+        if self._busy_cursor:
+            QApplication.restoreOverrideCursor()
+            self._busy_cursor = False
+
+    def _show_task_row(self):
+        if self._task_kind is None:
+            return
+        self.task_row.setVisible(True)
+        if not self._busy_cursor:
+            QApplication.setOverrideCursor(Qt.BusyCursor)
+            self._busy_cursor = True
+        self.layout().activate()            # place the row now, so the label elides to its width
+        self.task_row.layout().activate()
+        self._update_task_label()
+        self._task_tick_timer.start()
+
+    def draw_task_row(self):
+        """Draw the status row now, before work that keeps the GUI thread busy."""
+        if self.task_row.isVisible():
+            self.task_row.repaint()
+
+    def _update_task_label(self):
+        if self._task_kind is None:
+            return
+        name = self._task_kind[1]
+        self.task_label.setToolTip(name)
+        self.task_label.setText(self.task_label.fontMetrics().elidedText(
+            name, Qt.ElideMiddle, max(self.task_label.width(), 30)))
+        self.task_time_label.setText(f"{time.monotonic() - self._task_t0:.1f} s")
+        self.task_step_label.setText(self._task_step)
+        self.task_step_label.setVisible(bool(self._task_step))
+
     def refresh_model(self):
         # this effectively tells the model to "look again"
         self.model.setRootPath("")  # reset
@@ -503,6 +802,7 @@ class FolderTreeWidget(QWidget):
 
             # stop current monitoring but DO NOT flip the flag
             self._pause_monitoring()
+            self.cancel_task()
 
             self.model.setRootPath(root_path)
             self.tree.setRootIndex(self.proxy_model.mapFromSource(self.model.index(root_path)))
@@ -514,6 +814,7 @@ class FolderTreeWidget(QWidget):
             # clear navigation history
             self.history = []
             self.history_index = -1
+            self._forget_collapsed()
 
             # resume monitoring if user had it enabled
             if was_enabled:
@@ -559,13 +860,14 @@ class FolderTreeWidget(QWidget):
 
         if action:
             self.handle_context_action(action.text(), path)
+        menu.deleteLater()      # the window owns it now
 
     def get_context_actions(self, path):
         parent_dir = os.path.dirname(path)
         is_in_trash = os.path.basename(parent_dir) == TRASH_FOLDER_NAME
         is_trash = os.path.basename(path) == TRASH_FOLDER_NAME
 
-        menu = QMenu()
+        menu = QMenu(self.window())   # parented: see LivePlotWidget.handle_right_click
         menu.addAction("Open in File Explorer")
         menu.addAction("Copy Path")
 
@@ -695,46 +997,31 @@ class FolderTreeWidget(QWidget):
                 logger.error(f"Failed to delete trash folder {path}: {e}", exc_info=True)
 
     def select_most_recent_folder(self):
+        """Jump to the newest data folder under the root (by its run.py time).
+
+        The whole tree is walked again on each click, so the answer is always current; the walk
+        runs in the background (``scan_tree``, parallel on a network share) as a task (see
+        ``begin_task``) and the jump happens when it is done. A click while the jump walk is
+        still running is ignored."""
+        if self.task_running("jump", "Jump to newest"):
+            return
         root_path = self.model.rootPath()
-        most_recent_path = None
-        latest_mtime = -1.0
         logger.debug(f"Scanning for most recent data folder under {root_path}...")
+        stop = Event()
+        task_id = self.begin_task("jump", "Jump to newest", stop)
 
-        stack = [root_path]
-        while stack:
-            current_dir = stack.pop()
-            try:
-                with os.scandir(current_dir) as it:
-                    for entry in it:
-                        if not entry.is_dir(follow_symlinks=False):
-                            continue
+        def work():
+            runs, _, _ = scan_tree(root_path, stop_event=stop)
+            if not stop.is_set():
+                self._newest_found.emit(task_id, max(runs, key=runs.get) if runs else "")
 
-                        dirpath = entry.path
-                        # Skip Trash folders entirely
-                        if os.path.basename(dirpath) == TRASH_FOLDER_NAME:
-                            continue
+        Thread(target=work, name="acadia-newest-folder", daemon=True).start()
 
-                        # Check if this is a data folder
-                        run_py = os.path.join(dirpath, DATAFOLDER_INDICATOR_FILE)
-                        if os.path.isfile(run_py):
-                            try:
-                                mtime = os.stat(run_py, follow_symlinks=False).st_mtime
-                            except (FileNotFoundError, PermissionError):
-                                continue
-                            if mtime > latest_mtime:
-                                latest_mtime = mtime
-                                most_recent_path = dirpath
-                            # prune children of a datafolder
-                            continue
-
-                        # Not a datafolder → add to stack for further scanning
-                        stack.append(dirpath)
-            except (FileNotFoundError, PermissionError):
-                continue
-
-        if most_recent_path:
-            self.focus_path(most_recent_path)
-
+    def _on_newest_found(self, task_id, path):
+        if not self.task_is_current(task_id):     # stopped, or replaced by a later click
+            return
+        if not (path and self.focus_path(path)):
+            self.end_task(task_id)
 
     def sort_by_mtime(self):
         self.tree.sortByColumn(3, self.current_sort_order)
@@ -775,6 +1062,8 @@ class FolderTreeWidget(QWidget):
 
     def toggle_search_box(self):
         visible = self.search_button.isChecked()
+        if not visible and self.task_running() and self._task_kind[0] == "search":
+            self.cancel_task()
         self.search_box.setVisible(visible)
         self.prev_match_button.setVisible(visible)
         self.next_match_button.setVisible(visible)
@@ -796,11 +1085,29 @@ class FolderTreeWidget(QWidget):
                 self.goto_next_match()
             return
 
-        # text changed, redo search
-        self.search_matches = self.find_folders_matching(text)
+        # text changed, redo search: the walk runs in the background as a task (see begin_task)
+        label = f"Search '{text}'"
+        if self.task_running("search", label):
+            return
+        root_path = self.root_path
+        stop = Event()
+        task_id = self.begin_task("search", label, stop)
+
+        def work():
+            matches = self.find_folders_matching(text, root_path, stop)
+            if not stop.is_set():
+                self._search_found.emit(task_id, text, matches)
+
+        Thread(target=work, name="acadia-folder-search", daemon=True).start()
+
+    def _on_search_found(self, task_id, text, matches):
+        if not self.task_is_current(task_id):     # stopped, or replaced by a later click
+            return
+        self.search_matches = matches
         self.search_text = text
         count = len(self.search_matches)
         if count == 0:
+            self.end_task(task_id)
             self.match_label.setText("0/0")
             self.match_label.setStyleSheet("color: #ff5555; padding-left: 2px; padding-right: 2px;")
             self.match_label.setVisible(True)
@@ -811,16 +1118,16 @@ class FolderTreeWidget(QWidget):
         self.match_label.setStyleSheet("color: gray; padding-left: 2px; padding-right: 2px;")
         self.match_label.setVisible(True)
         self.jump_to_current_match()
+        self.end_task(task_id)          # no-op once opening the match has replaced it
 
-    def find_folders_matching(self, pattern: str):
-        matches = []
+    def find_folders_matching(self, pattern: str, root_path=None, stop_event=None):
+        """Folders and data folders under `root_path` (default: the root) whose name contains
+        `pattern`. Folders inside data folders are not searched: the tree cannot open a data
+        folder."""
         pattern_lower = pattern.lower()
-
-        for dirpath, dirnames, _ in os.walk(self.root_path):
-            if pattern_lower in os.path.basename(dirpath).lower():
-                matches.append(dirpath)
-
-        return matches
+        runs, folders, _ = scan_tree(root_path or self.root_path, stop_event=stop_event)
+        return sorted(path for path in list(folders) + list(runs)
+                      if pattern_lower in os.path.basename(path).lower())
 
     def jump_to_current_match(self):
         if 0 <= self.search_match_index < len(self.search_matches):
@@ -871,7 +1178,62 @@ class FolderTreeWidget(QWidget):
         self.refresh_button.setIcon(get_icon("refresh.svg"))
         self.sort_mtime_button.setIcon(get_icon("sort_by_time.svg"))
         self.search_button.setIcon(get_icon("search.svg"))
+        self.back_button.setIcon(get_icon("backward.svg"))
+        self.forward_button.setIcon(get_icon("forward.svg"))
+        self._set_collapse_ui()
         self._set_recent_lock_ui()  # recent button (lock state aware)
+
+    # -------------- collapse all folders / open them again ----------
+    def toggle_collapse_all(self):
+        """Collapse every expanded folder. The next click opens them again, unless a folder was
+        opened in between."""
+        if self._collapsed is None:
+            self._collapsed = (self._expanded_paths(), self.tree.verticalScrollBar().value())
+            current = self.tree.currentIndex()
+            self.tree.collapseAll()
+            self.last_expanded_path = None
+            if current.isValid():       # keep the selected folder's top-level folder in view
+                top = current
+                while top.parent().isValid() and top.parent() != self.tree.rootIndex():
+                    top = top.parent()
+                self.tree.scrollTo(top)
+            else:
+                self.tree.scrollToTop()
+        else:
+            paths, scroll = self._collapsed
+            self._collapsed = None
+            for path in paths:
+                index = self.path_to_proxy_index(path)
+                if index.isValid():
+                    self.tree.expand(index)
+            # the view lays out the opened folders later; scroll back after that
+            QTimer.singleShot(0, lambda: self.tree.verticalScrollBar().setValue(scroll))
+        self._set_collapse_ui()
+
+    def _expanded_paths(self):
+        """Paths of the expanded folders, each parent before its children."""
+        paths, parents = [], [self.tree.rootIndex()]
+        while parents:
+            parent = parents.pop()
+            for row in range(self.proxy_model.rowCount(parent)):
+                index = self.proxy_model.index(row, 0, parent)
+                if self.tree.isExpanded(index):
+                    paths.append(self.source_path_from_proxy_index(index))
+                    parents.append(index)
+        return paths
+
+    def _forget_collapsed(self, *_):
+        if self._collapsed is not None:
+            self._collapsed = None
+            self._set_collapse_ui()
+
+    def _set_collapse_ui(self):
+        if self._collapsed is None:
+            self.collapse_all_button.setIcon(get_icon("collapse_all.svg"))
+            self.collapse_all_button.setToolTip("Collapse all expanded folders")
+        else:
+            self.collapse_all_button.setIcon(get_icon("expand_all.svg"))
+            self.collapse_all_button.setToolTip("Open the collapsed folders again")
 
     # -------------- monitor and lock to the most recent folder ----------
     def _set_recent_lock_ui(self):
@@ -884,10 +1246,11 @@ class FolderTreeWidget(QWidget):
         """
         lock to always look at the most recent data folder
         """
-        menu = QMenu()
+        menu = QMenu(self.window())
         action_text = "Unlock auto-jump" if self.recent_lock_enabled else "Auto-jump to newest"
         action = menu.addAction(action_text)
         result = menu.exec_(self.recent_button.mapToGlobal(pos))
+        menu.deleteLater()
         if result == action:
             if self.recent_lock_enabled:
                 self.stop_monitoring()  # flips flag OFF
@@ -900,50 +1263,40 @@ class FolderTreeWidget(QWidget):
     def start_monitoring(self):
         self.recent_lock_enabled = True
         # don’t start twice
-        if self.monitor_thread is not None and self.monitor_thread.isRunning():
+        if self.monitor_thread is not None and self.monitor_thread.is_alive():
             self._set_recent_lock_ui()
             return
 
-        # clear stale thread if present
-        if self.monitor_thread is not None and not self.monitor_thread.isRunning():
-            self.monitor_thread.deleteLater()
-            self.monitor_thread = None
-
-        thread = QThread(self)
+        # The monitor only reads (os.walk / os.stat), so it runs in a daemon thread: a stat stuck
+        # on a network share that stopped answering then cannot hold up closing the browser.
+        # New data folders reach the GUI thread through the (queued) signal.
         worker = FolderMonitorWorker(self.root_path)
-
-        worker.moveToThread(thread)
-
-        thread.started.connect(worker.run)
         worker.new_datafolder_found.connect(self.handle_new_datafolder)
-        worker.finished.connect(thread.quit)
-        worker.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-
-        def _clear_refs(t=thread):
-            # only clear if THIS thread is still the active one
-            if self.monitor_thread is t:
-                self.monitor_worker = None
-                self.monitor_thread = None
-                self._set_recent_lock_ui()
-
-        thread.finished.connect(_clear_refs)
-
+        thread = Thread(target=worker.run, name="acadia-folder-monitor", daemon=True)
         self.monitor_thread = thread
         self.monitor_worker = worker
-
         thread.start()
         self._set_recent_lock_ui()
 
-    def _pause_monitoring(self):
-        """Internal: stop threads without changing recent_lock_enabled."""
-        if self.monitor_worker is not None:
-            self.monitor_worker.stop()
-        if self.monitor_thread is not None:
-            self.monitor_thread.quit()
-            self.monitor_thread.wait()
+    def _pause_monitoring(self, timeout=1.0):
+        """Internal: stop the monitor without changing recent_lock_enabled. Waits at most
+        ``timeout`` s; a monitor still stuck in a stat after that ends by itself once the call
+        returns."""
+        worker, thread = self.monitor_worker, self.monitor_thread
         self.monitor_worker = None
         self.monitor_thread = None
+        if worker is not None:
+            worker.stop()
+        if thread is not None:
+            thread.join(timeout)
+            if thread.is_alive():
+                logger.warning("Folder monitor did not stop within %.1f s (a folder is not "
+                               "answering); leaving it to finish in the background.", timeout)
+                if worker is not None:
+                    try:
+                        worker.new_datafolder_found.disconnect(self.handle_new_datafolder)
+                    except TypeError:
+                        pass
 
     def stop_monitoring(self):
         """User intent: fully disable auto-jump."""

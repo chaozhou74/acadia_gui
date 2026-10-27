@@ -189,11 +189,23 @@ QComboBox QAbstractItemView {
 /* ========== SCROLLBARS ========== */
 QScrollBar:vertical, QScrollBar:horizontal {
     background: #1c1c1c;
+}
+/* a styled scrollbar loses the native size: a horizontal bar needs its height set */
+QScrollBar:vertical {
     width: 12px;
+}
+QScrollBar:horizontal {
+    height: 12px;
 }
 QScrollBar::handle {
     background: #444;
     border-radius: 6px;
+}
+QScrollBar::handle:vertical {
+    min-height: 24px;
+}
+QScrollBar::handle:horizontal {
+    min-width: 24px;
 }
 QScrollBar::handle:hover {
     background: #5a5a5a;

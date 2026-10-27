@@ -6,10 +6,12 @@ import json
 
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QMainWindow, QVBoxLayout, QSplitter, QSizePolicy,
-    QTabWidget
+    QTabWidget, QTabBar
 )
 from PyQt5.QtCore import Qt, QTimer, QPoint, QSize, QRect, QSettings
+from PyQt5.QtGui import QPainter, QColor
 
+from acadia_gui.gui.instrument_parameter_view import load_colors
 from acadia_gui.gui import (LogViewer, InstrumentParamsViewer, YamlViewer,
                             FolderTreeWidget, is_datafolder,
                             AppMenuBar, KwargsJsonViewer, GuiLogWindow, GuiLogHandler)
@@ -17,6 +19,7 @@ from acadia_gui.gui.center_view import CenterView
 from acadia_gui import THEME_PATH
 from acadia_gui.utils import set_qt_scaling, load_user_config, get_qt_scaling, update_user_config
 from acadia_gui.icons import ICON_PATH, set_icon_color, icon_color_for_theme
+from acadia_gui.safety import install_excepthook
 
 logger = logging.getLogger(__name__)
 
@@ -25,9 +28,46 @@ def force_garbage_collect():
     collected = gc.collect()
 
 
+class HighlightTabBar(QTabBar):
+    """Tab bar that paints chosen tabs on a highlight background (e.g. a tab that is busy).
+    Drawn here because a theme stylesheet styles all tabs alike."""
+    def __init__(self):
+        super().__init__()
+        self._color = QColor()
+        self._text_color = QColor()
+        self._base = None
+        self._highlighted = set()
+
+    def set_colors(self, color, text_color, base=None):
+        """`color` may be see-through; it is then painted over `base` (the panel color)."""
+        self._color, self._text_color = QColor(color), QColor(text_color)
+        self._base = QColor(base) if base else None
+        self.update()
+
+    def set_highlighted(self, index, on):
+        (self._highlighted.add if on else self._highlighted.discard)(index)
+        self.update()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if not self._highlighted:
+            return
+        painter = QPainter(self)
+        for index in self._highlighted:
+            if 0 <= index < self.count():
+                rect = self.tabRect(index).adjusted(1, 1, -1, 0)
+                if self._base is not None:
+                    painter.fillRect(rect, self._base)
+                painter.fillRect(rect, self._color)
+                painter.setPen(self._text_color)
+                painter.drawText(rect, Qt.AlignCenter, self.tabText(index))
+        painter.end()
+
+
 class RightPanelTabs(QTabWidget):
     def __init__(self, client_station=None):
         super().__init__()
+        self.setTabBar(HighlightTabBar())
         self.config_yaml_tab = YamlViewer()
         self.instruments_tab = InstrumentParamsViewer(client_station)
         self.log_tab = LogViewer()
@@ -37,6 +77,14 @@ class RightPanelTabs(QTabWidget):
         self.addTab(self.kwargs_json_tab, "Kwargs")
         self.addTab(self.instruments_tab, "Instruments")
         self.addTab(self.log_tab, "Logs")
+        # the Instruments tab is highlighted while parameters are loading
+        self.instruments_tab.loading_changed.connect(
+            lambda loading: self.tabBar().set_highlighted(self.indexOf(self.instruments_tab), loading))
+
+    def set_theme(self, theme_name):
+        colors = load_colors(theme_name)
+        self.tabBar().set_colors(colors["loading"], colors["loading_text"], colors["pane"])
+        self.instruments_tab.set_theme(theme_name)
 
     def update_content(self, folder_path):
         self.instruments_tab.load_json(folder_path)
@@ -49,6 +97,19 @@ class RightPanelTabs(QTabWidget):
         self.config_yaml_tab.clear()
         self.kwargs_json_tab.clear()
         self.log_tab.clear()
+
+
+def _forget_position_on_wayland(window):
+    """Keep a restored window size but not its position, on Wayland.
+
+    A Wayland client cannot place its windows, so a position restored from saved settings is
+    never applied, yet Qt keeps assuming the window is there. Menus and other popups are then
+    computed from that assumed position and fitted to the screen first; a position saved on a
+    wider desktop (e.g. another monitor layout) put every menu at the left edge of the screen.
+    Qt assumes the origin for a window it never moved, which is what popups need.
+    """
+    if QApplication.platformName().startswith("wayland"):
+        window.move(0, 0)
 
 
 class DataBrowser(QMainWindow):
@@ -65,6 +126,7 @@ class DataBrowser(QMainWindow):
         """
 
         super().__init__()
+        install_excepthook()     # an error in one handler must not abort the whole browser
         self.setWindowTitle("Data Browser")
         self.resize(1600, 1000)
 
@@ -77,11 +139,17 @@ class DataBrowser(QMainWindow):
         # --- Menu Bar ---
         self.menu_bar = AppMenuBar(parent=self, apply_theme_callback=self.apply_theme)
         self.setMenuBar(self.menu_bar)
+        self.menu_bar.instrument_tracker_requested.connect(self.open_instrument_tracker)
+        self.instrument_tracker = None
+        self.theme_name = None
 
         # --- Main GUI components ---
         self.folder_tree = FolderTreeWidget(root_path, self.on_folder_selected)
         self.center_view = CenterView()
+        self.center_view.live.live_plot.open_step.connect(self.folder_tree.set_task_step)
+        self._pending_open = None           # (folder, task id) waiting to be opened
         self.right_tabs = RightPanelTabs(client_station)
+        self.right_tabs.instruments_tab.go_to_runtime.connect(self.go_to_folder)
 
         # --- Right column: image + params ---
         self.right_splitter = QSplitter(Qt.Horizontal)
@@ -133,6 +201,51 @@ class DataBrowser(QMainWindow):
         self.move(x, y)
 
     def on_folder_selected(self, folder_path):
+        """Open a folder as a task of the folder tree (status row, busy cursor). Opening runs on
+        the GUI thread, which keeps the row's timer from firing, so the row is drawn first when
+        the run's data will be processed, and not at all for other folders, which open quickly.
+        The folder opens on the next pass of the event loop; a later click before that replaces
+        it."""
+        name = os.path.basename(os.path.normpath(folder_path))
+        processing = self.center_view.will_process(folder_path, is_datafolder(folder_path))
+        task_id = self.folder_tree.begin_task("open", f"Opening {name}",
+                                              show_after_ms=0 if processing else None)
+        self.folder_tree.draw_task_row()
+        self._pending_open = (folder_path, task_id)
+        QTimer.singleShot(0, self._open_pending_folder)
+
+    def open_instrument_tracker(self):
+        """Show the instrument tracker for the current root (a new one if the root changed)."""
+        from acadia_gui.gui.instrument_tracker import InstrumentTrackerWindow
+        root = self.folder_tree.root_path
+        tracker = self.instrument_tracker
+        if tracker is None or tracker.root != root or not tracker.isVisible():
+            if tracker is not None:
+                tracker.close()
+            tracker = self.instrument_tracker = InstrumentTrackerWindow(root, self.go_to_folder, self)
+            tracker.set_theme(self.theme_name or "default")
+            tracker.start_tracking()
+        tracker.show()
+        tracker.raise_()
+        tracker.activateWindow()
+
+    def go_to_folder(self, folder_path):
+        if not self.folder_tree.focus_path(folder_path):
+            logger.warning(f"Folder not found in the folder tree: {folder_path}")
+
+    def _open_pending_folder(self):
+        if self._pending_open is None:
+            return
+        folder_path, task_id = self._pending_open
+        self._pending_open = None
+        if not self.folder_tree.task_is_current(task_id):
+            return
+        try:
+            self._open_folder(folder_path)
+        finally:
+            self.folder_tree.end_task(task_id)
+
+    def _open_folder(self, folder_path):
         self.center_view.clear()
         self.right_tabs.clear()
 
@@ -146,6 +259,7 @@ class DataBrowser(QMainWindow):
             self.center_view.load_images(folder_path, is_data_folder=False)
 
     def apply_theme(self, theme_name):
+        self.theme_name = theme_name
         try:
             theme_path = THEME_PATH / theme_name
             if theme_path.suffix != '.css':
@@ -173,6 +287,9 @@ class DataBrowser(QMainWindow):
 
         # forward to central matplotlib plot
         self.center_view.set_theme(theme_name)
+        self.right_tabs.set_theme(theme_name)
+        if self.instrument_tracker is not None:
+            self.instrument_tracker.set_theme(theme_name)
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -267,6 +384,8 @@ class DataBrowser(QMainWindow):
         # maximized; the compositor controls placement on Wayland)
         if not want_maximized:
             self._ensure_on_screen()
+        for window in (self, self.log_window):
+            _forget_position_on_wayland(window)
 
     def save_ui_settings(self):
         s = QSettings("acadia", "DataBrowser")
@@ -285,10 +404,20 @@ class DataBrowser(QMainWindow):
         # remember the data root so the next launch reopens it (see resolve_startup_root)
         update_user_config(last_root=self.folder_tree.root_path)
 
+    def shutdown(self):
+        """Stop the timers and the folder-monitor thread (safe to call more than once). Child
+        widgets get no closeEvent, so this is what stops them when the window closes."""
+        self.folder_tree._pause_monitoring()      # keeps the auto-jump setting as it is
+        self.center_view.live.live_plot.timer.stop()
+        self.right_tabs.log_tab.timer.stop()
+
     def closeEvent(self, event):
         try:
             self.save_ui_settings()
+        except Exception as e:
+            logger.error(f"Failed to save UI settings: {e}", exc_info=True)
         finally:
+            self.shutdown()
             super().closeEvent(event)
 
 

@@ -9,7 +9,8 @@ from acadia_gui import APP_ID, APP_NAME
 from acadia_gui.gui import DataBrowser
 from acadia_gui.utils import (
     set_qt_scaling, check_wsl_interop, set_wsl_display_backend,
-    install_desktop_integration, setup_desktop_on_launch, resolve_startup_root
+    install_desktop_integration, setup_desktop_on_launch, resolve_startup_root,
+    install_system_deps
 )
 from acadia_gui.icons import get_icon
 
@@ -39,6 +40,7 @@ def launch_acadia_gui(root_path:str = None, instrument_station=None, dark_mode=F
     window.setWindowTitle(APP_NAME)
     window.setWindowIcon(get_icon("app_icon.svg", recolor=False))  # your icon file here
     window.show()
+    app.aboutToQuit.connect(window.shutdown)     # also on quit paths that skip closeEvent
     sys.exit(app.exec_())
 
 
@@ -76,7 +78,15 @@ def acadia_gui_cli():
                         help='Add the app to the application launcher (Linux: no sudo; '
                              'WSL: system-wide, one sudo prompt), then exit.')
 
+    # Install the Linux system packages the GUI needs (Qt xcb libraries, a cursor theme) and exit.
+    parser.add_argument('--install-system-deps', action='store_true',
+                        help='apt install the missing Qt xcb libraries and cursor theme '
+                             '(Debian/Ubuntu, one sudo prompt), then exit.')
+
     args = parser.parse_args()
+
+    if args.install_system_deps:
+        sys.exit(0 if install_system_deps() else 1)
 
     if args.install_desktop:
         # Render the icon offscreen so this works without a display/compositor.

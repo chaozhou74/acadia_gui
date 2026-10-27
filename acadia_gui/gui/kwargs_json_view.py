@@ -108,7 +108,7 @@ class KwargsJsonViewer(QWidget):
         if not selected:
             return
 
-        menu = QMenu()
+        menu = QMenu(self.window())   # parented: see LivePlotWidget.handle_right_click
         obj = selected.data(0, Qt.UserRole)
 
         # add copy option
@@ -120,6 +120,7 @@ class KwargsJsonViewer(QWidget):
 
         # get action
         action = menu.exec_(self.tree.viewport().mapToGlobal(position))
+        menu.deleteLater()      # the window owns it; deleted once this handler returns
         if action is None:
             return
 
