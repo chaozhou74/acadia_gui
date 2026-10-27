@@ -6,7 +6,7 @@ import logging
 
 
 from PyQt5.QtWidgets import QMenuBar, QAction, QLabel, QApplication, QTextEdit, QWidget, QVBoxLayout, QFrame, QToolButton, QHBoxLayout, QInputDialog, QMessageBox
-from PyQt5.QtCore import QTimer, Qt, QUrl
+from PyQt5.QtCore import QTimer, Qt, QUrl, pyqtSignal
 from PyQt5.QtGui import QIcon, QDesktopServices
 
 
@@ -77,6 +77,7 @@ def count_qobjects():
 
 
 class AppMenuBar(QMenuBar):
+    instrument_tracker_requested = pyqtSignal()
     def __init__(self, parent=None, apply_theme_callback=None):
         super().__init__(parent)
         self.apply_theme_callback = apply_theme_callback
@@ -87,6 +88,11 @@ class AppMenuBar(QMenuBar):
         # === Menus ===
         self.theme_menu = self.addMenu("Theme")
         self.view_menu = self.addMenu("View")
+        self.tools_menu = self.addMenu("Tools")
+        self.instrument_tracker_action = self.tools_menu.addAction("Instrument tracker")
+        self.instrument_tracker_action.setToolTip("The history of the saved instrument parameters "
+                                                  "of every run under the root folder")
+        self.instrument_tracker_action.triggered.connect(self.instrument_tracker_requested)
         self.help_action = self.addAction("Help")
         self.help_action.setToolTip("Open the acadia_gui readme")
         self.help_action.triggered.connect(self.open_readme)

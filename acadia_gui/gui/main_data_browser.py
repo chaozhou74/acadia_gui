@@ -139,6 +139,9 @@ class DataBrowser(QMainWindow):
         # --- Menu Bar ---
         self.menu_bar = AppMenuBar(parent=self, apply_theme_callback=self.apply_theme)
         self.setMenuBar(self.menu_bar)
+        self.menu_bar.instrument_tracker_requested.connect(self.open_instrument_tracker)
+        self.instrument_tracker = None
+        self.theme_name = None
 
         # --- Main GUI components ---
         self.folder_tree = FolderTreeWidget(root_path, self.on_folder_selected)
@@ -211,6 +214,21 @@ class DataBrowser(QMainWindow):
         self._pending_open = (folder_path, task_id)
         QTimer.singleShot(0, self._open_pending_folder)
 
+    def open_instrument_tracker(self):
+        """Show the instrument tracker for the current root (a new one if the root changed)."""
+        from acadia_gui.gui.instrument_tracker import InstrumentTrackerWindow
+        root = self.folder_tree.root_path
+        tracker = self.instrument_tracker
+        if tracker is None or tracker.root != root or not tracker.isVisible():
+            if tracker is not None:
+                tracker.close()
+            tracker = self.instrument_tracker = InstrumentTrackerWindow(root, self.go_to_folder, self)
+            tracker.set_theme(self.theme_name or "default")
+            tracker.start_tracking()
+        tracker.show()
+        tracker.raise_()
+        tracker.activateWindow()
+
     def go_to_folder(self, folder_path):
         if not self.folder_tree.focus_path(folder_path):
             logger.warning(f"Folder not found in the folder tree: {folder_path}")
@@ -241,6 +259,7 @@ class DataBrowser(QMainWindow):
             self.center_view.load_images(folder_path, is_data_folder=False)
 
     def apply_theme(self, theme_name):
+        self.theme_name = theme_name
         try:
             theme_path = THEME_PATH / theme_name
             if theme_path.suffix != '.css':
@@ -269,6 +288,8 @@ class DataBrowser(QMainWindow):
         # forward to central matplotlib plot
         self.center_view.set_theme(theme_name)
         self.right_tabs.set_theme(theme_name)
+        if self.instrument_tracker is not None:
+            self.instrument_tracker.set_theme(theme_name)
 
     def showEvent(self, event):
         super().showEvent(event)

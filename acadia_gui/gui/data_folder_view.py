@@ -147,14 +147,16 @@ def scan_threads_for(path):
     return SCAN_THREADS
 
 
-def _list_folder(path):
+def _list_folder(path, skip_trash=True):
     """One folder's subfolders {path: mtime} and data folders {path: run.py mtime}, or None if
     it cannot be read now. One listing, plus one stat of each subfolder's run.py, which both
-    tells a data folder apart and gives its time (the jump-to-newest order)."""
+    tells a data folder apart and gives its time (the jump-to-newest order). Trash folders are
+    left out unless ``skip_trash`` is False."""
     subs, runs = {}, {}
     try:
         with os.scandir(path) as it:
-            entries = [e for e in it if e.name != TRASH_FOLDER_NAME and e.is_dir(follow_symlinks=False)]
+            entries = [e for e in it if (e.name != TRASH_FOLDER_NAME or not skip_trash)
+                       and e.is_dir(follow_symlinks=False)]
     except FileNotFoundError:
         return subs, runs
     except OSError:
@@ -172,11 +174,11 @@ def _list_folder(path):
     return subs, runs
 
 
-def scan_tree(root, threads=None, stop_event=None):
+def scan_tree(root, threads=None, stop_event=None, skip_trash=True):
     """Walk `root` once: ({data folder: run.py mtime}, {other folder: mtime or None}, [folders
-    that could not be read]). Data folders are not descended into. With several threads the
-    listings run in parallel on daemon threads, so a request stuck on a dead share never holds
-    up closing the program."""
+    that could not be read]). Data folders are not descended into, nor Trash folders unless
+    ``skip_trash`` is False. With several threads the listings run in parallel on daemon
+    threads, so a request stuck on a dead share never holds up closing the program."""
     threads = threads or scan_threads_for(root)
     runs, folders, failed = {}, {}, []
     try:
@@ -197,7 +199,7 @@ def scan_tree(root, threads=None, stop_event=None):
         stack = [root]
         while stack and not (stop_event and stop_event.is_set()):
             path = stack.pop()
-            stack.extend(take(path, _list_folder(path)))
+            stack.extend(take(path, _list_folder(path, skip_trash)))
         return runs, folders, failed
 
     todo, lock, done = queue.Queue(), Lock(), Event()
@@ -209,7 +211,7 @@ def scan_tree(root, threads=None, stop_event=None):
             path = todo.get()
             if path is None:
                 return
-            result = _list_folder(path)
+            result = _list_folder(path, skip_trash)
             with lock:
                 subs = take(path, result)
                 pending[0] += len(subs) - 1
