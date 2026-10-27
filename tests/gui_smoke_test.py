@@ -1730,7 +1730,7 @@ def section_tracker(s):
     canvas.callbacks.process("key_press_event", KeyEvent("key_press_event", canvas, "left"))
     s.check("← steps back", tracker._cursor_run() == run, str(tracker.cursor))
     # an empty spot: the cursor at that time, no changes, the runs around it
-    gap = (tracker._times[run + 3] + tracker._times[run + 4]) / 2        # away from the cursor, which drags
+    gap = (tracker._times[run + 3] + tracker._times[run + 4]) / 2        # away from the cursor
     x0, y0 = ax.transData.transform((gap / 86400.0, tracker._row_y[("dac_b", None)]))
     mouse("button_press_event", x0, y0, button=1)
     mouse("button_release_event", x0, y0, button=1)
@@ -1740,13 +1740,29 @@ def section_tracker(s):
             and "no change" in tracker.cursor_label.text(), str(tracker.cursor))
     canvas.callbacks.process("key_press_event", KeyEvent("key_press_event", canvas, "escape"))
     s.check("Esc removes the cursor", tracker.cursor is None and table.rowCount() == 0)
-    # the hover line follows the mouse; the cursor can be dragged and snaps to the changes it passes
+    # the hover line follows the mouse; the cursor is dragged by its time on top and snaps to the
+    # changes it passes; the line itself is not a handle
     mouse("motion_notify_event", x0, y0)
     s.check("a faint line follows the mouse", tracker._hover_line.get_visible()
             and abs(tracker._hover_line.get_xdata()[0] - gap / 86400.0) < 1e-3)
     tracker.set_cursor(t=gap)
+    canvas.draw()
     cx = ax.transData.transform((gap / 86400.0, 0))[0]
-    mouse("button_press_event", cx, y0, button=1)
+    mouse("motion_notify_event", cx + 1, y0)
+    on_line = canvas.cursor().shape()
+    mouse("button_press_event", cx + 1, y0, button=1)
+    mouse("motion_notify_event", cx + 40, y0)
+    mouse("button_release_event", cx + 40, y0, button=1)
+    s.check("the cursor's line is not a handle: no resize pointer, a press there doesn't drag it",
+            on_line != Qt.SizeHorCursor and abs(tracker.cursor["time"] - gap) < 60, str(tracker.cursor))
+    tracker.set_cursor(t=gap)
+    canvas.draw()
+    stamp = tracker._cursor_label.get_bbox_patch().get_window_extent()
+    sx, sy = (stamp.x0 + stamp.x1) / 2, (stamp.y0 + stamp.y1) / 2
+    mouse("motion_notify_event", sx, sy)
+    s.check("the cursor's time on top shows the resize pointer", canvas.cursor().shape() == Qt.SizeHorCursor
+            and sy > ax.bbox.y1, f"{canvas.cursor().shape()} {sy} {ax.bbox.y1}")
+    mouse("button_press_event", sx, sy, button=1)
     tx, _ty = px(("src_a", None), later)
     mouse("motion_notify_event", tx + 2, y0)
     s.check("dragging the cursor onto a change snaps to its run", tracker._cursor_run() == later, str(tracker.cursor))

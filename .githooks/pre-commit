@@ -1,0 +1,15 @@
+#!/bin/sh
+# Bump the last digit of the version in setup.py on every commit. Enable once per clone with
+#     git config core.hooksPath .githooks
+# Skipped when the commit already changes the version (a bump by hand), and on --amend.
+case "$(ps -o args= -p "$PPID" 2>/dev/null)" in *--amend*) exit 0 ;; esac
+pattern="version='[0-9]*\.[0-9]*\.[0-9]*'"
+staged=$(git show :setup.py 2>/dev/null | grep -o "$pattern") || exit 0
+[ "$staged" = "$(git show HEAD:setup.py 2>/dev/null | grep -o "$pattern")" ] || exit 0
+old=$(echo "$staged" | sed "s/version='\(.*\)'/\1/")
+new=$(echo "$old" | awk -F. '{printf "%d.%d.%d", $1, $2, $3 + 1}')
+# the staged copy (other staged or unstaged edits of setup.py stay as they are) and the working copy
+blob=$(git show :setup.py | sed "s/version='$old'/version='$new'/" | git hash-object -w --stdin)
+git update-index --cacheinfo 100644,"$blob",setup.py
+sed "s/version='$old'/version='$new'/" setup.py > setup.py.tmp && mv setup.py.tmp setup.py
+echo "version $old -> $new"

@@ -136,6 +136,16 @@ exit code is 0 when every check passed.
 
 ---
 
+## Version
+The version is in `setup.py`. A git hook bumps its last digit on every commit (not on `--amend`, and
+not when the commit changes the version by hand, e.g. to bump the first two digits). Enable it once
+per clone:
+```
+git config core.hooksPath .githooks
+```
+
+---
+
 ## Trouble shooting
 -  **Error loading 'xcb' Plugin**
 

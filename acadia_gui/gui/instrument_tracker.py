@@ -320,7 +320,7 @@ def find_changes(record, k=DEFAULT_K, thresholds=None):
 
 # ---------------------------------------------------------------------------------- window
 
-SNAP_PIXELS = 6              # a click, drag or hover this close to a bar (or the cursor) picks it
+SNAP_PIXELS = 6              # a click, drag or hover this close to a bar picks it
 DIM_ALPHA = 0.55             # the other bars while the cursor is on a run
 BAND_ALPHA = 0.07            # behind a split instrument's parameter rows, in the instrument's colour
 SCROLL_STEPS = 10000         # resolution of the time scroll bar
@@ -331,7 +331,7 @@ INSTRUMENT_ROW_PX = 30       # row heights, shared by the tree and the timeline
 PARAMETER_ROW_PX = 24
 FILTER_DELAY_MS = 300        # the filter applies this long after the last key
 PANEL_DELAY_MS = 40          # while the cursor is dragged, the panel follows at most this often
-CURSOR_HINT = "Click the timeline to place the cursor. Drag it, or step through the changes with ‹ ›."
+CURSOR_HINT = "Click the timeline to place the cursor. Drag its time on top, or step through the changes with ‹ ›."
 AFTER_TITLES = ("Changed at run", "No change at run", "First run after")   # on a change, a run, neither
 JITTER_TIP = "Jitter: how much the value wobbles from run to run when nobody changes it."
 _RUNTIME_IMPORT = re.compile(r"^\s*from runtime import (\w+)", re.M)
@@ -1730,6 +1730,12 @@ class InstrumentTrackerWindow(QWidget):
             return False
         return abs(self._to_px([self.cursor["time"] / 86400.0])[0] - mouse.x) <= SNAP_PIXELS
 
+    def _on_cursor_stamp(self, mouse):
+        """Whether the mouse is on the cursor's time above the rows, the handle the cursor is dragged by."""
+        if self.cursor is None or mouse.x is None or not hasattr(self, "_cursor_label"):
+            return False
+        return self._cursor_label.get_bbox_patch().get_window_extent().padded(2).contains(mouse.x, mouse.y)
+
     def _hover_text(self, hit):
         kind, row, target = hit
         if kind == "run":
@@ -1754,6 +1760,10 @@ class InstrumentTrackerWindow(QWidget):
             shift = (mouse.x - x0) / max(self.ax.bbox.width, 1) * (view[1] - view[0])
             self._set_view(view[0] - shift, view[1] - shift)
             return
+        if self._on_cursor_stamp(mouse):
+            self._hide_hover()
+            self.canvas.setCursor(Qt.SizeHorCursor)
+            return
         if mouse.inaxes not in (self.ax, self.strip_ax) or mouse.xdata is None:
             self._hide_hover()
             self.canvas.unsetCursor()
@@ -1766,10 +1776,6 @@ class InstrumentTrackerWindow(QWidget):
         self._hover_strip.set_visible(True)
         self._hover_label.set_visible(not self._near_cursor(mouse))
         self._blit_hover()
-        if self._near_cursor(mouse):
-            self.canvas.setCursor(Qt.SizeHorCursor)
-            QToolTip.hideText()
-            return
         hit = self._hit(mouse)
         if hit is None:
             self.canvas.unsetCursor()
@@ -1813,7 +1819,13 @@ class InstrumentTrackerWindow(QWidget):
             self._panel_timer.start()
 
     def _on_press(self, mouse):
-        if mouse.inaxes not in (self.ax, self.strip_ax) or mouse.button != 1 or self.record is None:
+        if mouse.button != 1 or self.record is None:
+            return
+        if self._on_cursor_stamp(mouse):
+            self.canvas.setFocus()
+            self._drag = {"kind": "cursor"}
+            return
+        if mouse.inaxes not in (self.ax, self.strip_ax):
             return
         self.canvas.setFocus()
         QToolTip.hideText()
@@ -1826,9 +1838,7 @@ class InstrumentTrackerWindow(QWidget):
             elif run is None:
                 self._fit()
             return
-        if self._near_cursor(mouse):
-            self._drag = {"kind": "cursor"}
-        elif run is not None:
+        if run is not None:
             self.set_cursor(run=run)
         else:
             self._drag = {"kind": "pan", "x": mouse.x, "xdata": mouse.xdata, "view": self._view, "moved": False}

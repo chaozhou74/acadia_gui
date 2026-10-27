@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
       name='acadia_gui',
-      version='0.0.1',
+      version='1.0.1',
       packages=find_packages(),
       package_data={
           'acadia_gui': ['icons/*.svg', 'themes/*.css'],
