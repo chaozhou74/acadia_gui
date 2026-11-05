@@ -178,3 +178,18 @@ was stuck in.
 ---
 
 ## Issues
+
+## SeeQuence: loaded settings and feedback paths
+
+The Trace panel's **one shot per loaded setting** control is on by default.
+It visualizes with `shots_per_load=1`, without changing the archived run or any
+hardware instruction. Thus a 1,000-shot batch occupies one selector point,
+instead of hiding later settings behind the 4,096-point capture limit.
+Uncheck it and press Reload for the original individual-shot view; truncation
+is shown in the status line. This applies to runtimes using `shots_per_load`.
+
+Unknown simple register comparisons use one provisional zero value, and stay
+labelled assumed. Complementary g/e tests therefore draw one possible input,
+rather than an impossible pi followed by its zero-amplitude alternative.
+Controls still allow explicit alternative paths. Restart an already running
+data browser to load the updated viewer code, then Reload the data folder.

@@ -58,8 +58,9 @@ def _combo(items):
 
 
 POINT_TIP = (
-    "Which sweep point to show.\n"
-    "The runtime's sweep, flattened to 1D in its defined order (0 … N-1).")
+    "Which point in the runtime's flattened sweep to show (0 … N-1).\n"
+    "With 'one shot per loaded setting', repeated shots_per_load shots are\n"
+    "represented once. Without it, each point is an individual Acadia.run call.")
 
 # Sub-lane resolution of the vertical scrollbar. QScrollBar is int-only, and a
 # thousandth of a lane is far finer than a pixel on any canvas, so the bar pans
@@ -169,6 +170,13 @@ class SequenceWidget(QWidget):
         self.saved_qmsmt.setToolTip(
             "Import against the acadia_qmsmt.py saved in the folder (falls back "
             "to the installed package if that fails)")
+        self.one_shot_per_setting = QCheckBox("one shot per loaded setting")
+        self.one_shot_per_setting.setChecked(True)
+        self.one_shot_per_setting.setToolTip(
+            "Use shots_per_load=1 in the visualization only, so repeated shots\n"
+            "do not exhaust the point limit before other sweep settings appear.\n"
+            "The data folder and experiment are unchanged. Uncheck for individual\n"
+            "shot points. Applies on Reload; affects runtimes using shots_per_load.")
         self.reload_button = QPushButton("Reload")
 
         # ---- draw controls (a change only re-renders); each option is tooltip'd ----
@@ -294,6 +302,7 @@ class SequenceWidget(QWidget):
         point_label.setToolTip(POINT_TIP)
         trace_box.addLayout(form((point_label, self.point)))
         trace_box.addWidget(self.saved_qmsmt)
+        trace_box.addWidget(self.one_shot_per_setting)
         trace_box.addWidget(self.reload_button)
         trace_group = QGroupBox("Trace")
         trace_group.setLayout(trace_box)
@@ -442,16 +451,24 @@ class SequenceWidget(QWidget):
         self._set_status(f"Tracing {self.folder} …")
         self.status.repaint()
         try:
+            # Repeated CPU acquisition shots have the same loaded sequence.
+            # Show every loaded setting without changing the saved experiment.
+            overrides = {"shots_per_load": 1} if self.one_shot_per_setting.isChecked() else None
             self.trace = trace_folder(
                 self.folder,
                 point=0,
                 resolve_indeterminate=0,   # per-register overrides replace the blanket
-                use_saved_qmsmt=self.saved_qmsmt.isChecked())
+                use_saved_qmsmt=self.saved_qmsmt.isChecked(),
+                overrides=overrides)
         except Exception as exc:
             self.clear(f"Could not trace this folder: {type(exc).__name__}: {exc}")
             return
         self.adopt_trace(self.trace)
-        self._set_status("")     # summary dropped; just clear the tracing message
+        if self.trace.truncated_points:
+            self._set_status(f"Trace limited to the first {self.trace.n_points} points. "
+                             "For batched shots, enable 'one shot per loaded setting' and Reload.")
+        else:
+            self._set_status("")
 
     @_guarded
     def adopt_trace(self, trace):
