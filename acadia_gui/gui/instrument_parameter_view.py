@@ -15,6 +15,12 @@ from acadia_gui.gui.gui_log_window import INSTRUMENT_LOG_LEVEL
 
 logger = logging.getLogger(__name__)
 
+# Virtual instruments that hold derived/computed values (not real hardware) -- no
+# checkbox, so they can never be selected for "Load Parameters" by accident (e.g. via
+# "Select/Unselect All"). See msmt_workbench.instruments._attach_phase_params.
+NON_LOADABLE_INSTRUMENTS = {"derived_params"}
+
+
 def load_inst_params(path):
     inst_file = os.path.join(path, "inst_params.json")
     if not os.path.isfile(inst_file):
@@ -197,8 +203,9 @@ class InstrumentParamsViewer(QWidget):
 
         for inst_name, params in self.inst_data.items():
             inst_item = QTreeWidgetItem([inst_name])
-            inst_item.setFlags(inst_item.flags() | Qt.ItemIsUserCheckable)
-            inst_item.setCheckState(0, Qt.Unchecked)
+            if inst_name not in NON_LOADABLE_INSTRUMENTS:
+                inst_item.setFlags(inst_item.flags() | Qt.ItemIsUserCheckable)
+                inst_item.setCheckState(0, Qt.Unchecked)
 
             # Add parameters as children
             if isinstance(params, dict):
@@ -219,7 +226,8 @@ class InstrumentParamsViewer(QWidget):
     def toggle_all_items(self, state):
         for i in range(self.tree.topLevelItemCount()):
             item = self.tree.topLevelItem(i)
-            item.setCheckState(0, Qt.Checked if state == Qt.Checked else Qt.Unchecked)
+            if item.flags() & Qt.ItemIsUserCheckable:
+                item.setCheckState(0, Qt.Checked if state == Qt.Checked else Qt.Unchecked)
 
     def on_item_changed(self, item, column):
         if item.parent() is None:  # top-level instrument
