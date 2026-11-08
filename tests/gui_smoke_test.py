@@ -590,6 +590,14 @@ def section_tasks(s):
         s.pump(0.3)
         s.check("search: opens the match", opened() == [b] and ft.match_label.text() == "1/1",
                 f"{opened()} {ft.match_label.text()}")
+        ft.focus_path(a)
+        s.pump(1.0)
+        log.clear()
+        ft.search_box.returnPressed.emit()
+        s.pump_until(lambda: not ft.task_running(), 60)
+        s.pump(0.3)
+        s.check("search: Enter again jumps back to the single match", opened() == [b],
+                str(opened()))
         # 7. closing the search box stops a search
         log.clear()
         ft.search_box.setText("f1")

@@ -1079,10 +1079,13 @@ class FolderTreeWidget(QWidget):
         if not text:
             return
 
-        # no text change, type enter move to next match
-        if text == self.search_text:
+        # no text change: Enter moves to the next match, or back to the only one; no match
+        # searches again
+        if text == self.search_text and self.search_matches:
             if len(self.search_matches) > 1:
                 self.goto_next_match()
+            else:
+                self.jump_to_current_match()
             return
 
         # text changed, redo search: the walk runs in the background as a task (see begin_task)
