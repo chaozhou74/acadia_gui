@@ -273,10 +273,10 @@ class SequenceWidget(QWidget):
         self.envelope_scale = _combo([
             ("per-pulse", "fill every bar to its own peak — shape only, amplitude "
                           "not comparable"),
-            ("channel", "scale to the loudest pulse on each DAC"),
-            ("shared", "scale to the loudest pulse anywhere"),
+            ("channel", "scale to the loudest pulse on each DAC over all sweep steps"),
+            ("shared", "scale to the loudest pulse anywhere over all sweep steps"),
             ("absolute", "scale to DAC full scale")])
-        self.envelope_scale.setCurrentText("channel")   # default to a comparable scale
+        self.envelope_scale.setCurrentText("absolute")
         self.envelope_mode = _combo([
             ("magnitude", "draw |s| — hides detune, phase and the DRAG quadrature"),
             ("iq", "draw I and Q about the lane centre — shows detune, phase, DRAG")])

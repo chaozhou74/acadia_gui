@@ -1089,11 +1089,13 @@ class LivePlotWidget(QWidget):
             return False
 
     def _update_progress_bar(self, completed_iter):
-        # Once the run is over, total the iterations that actually ran rather than the
-        # requested `iterations` kwarg: a run stopped at 496 of 1000 reads 496/496 with a
-        # full bar, and the iteration window then spans the whole width of it.
+        # A finished run normally keeps the requested `iterations` as its maximum, so a run
+        # stopped at 496 of 1000 shows a half-filled bar. Only while the iteration window is
+        # open is the bar rescaled to the iterations that actually ran (496/496, full bar),
+        # so the window can span the whole width of it.
         finished = self._run_finished(completed_iter)
-        if finished and completed_iter > 0:
+        rescale = finished and completed_iter > 0 and self.progress_bar.window_mode()
+        if rescale:
             denom = int(completed_iter)
             self.progress_bar.setMaximum(denom)
             if self.total_iter is not None and self.total_iter != denom:
@@ -1108,9 +1110,9 @@ class LivePlotWidget(QWidget):
 
         self.progress_bar.setValue(int(completed_iter))
 
-        # A finished run has no denominator worth showing -- the requested count moves to
+        # A rescaled bar has no denominator worth showing -- the requested count moves to
         # the tooltip, and the bar simply states how many iterations there are.
-        count_txt = f"{completed_iter} iterations" if finished else f"{completed_iter}/{denom}"
+        count_txt = f"{completed_iter} iterations" if rescale else f"{completed_iter}/{denom}"
 
         # Spell the window out in the bar text: the two flanking boxes give the endpoints,
         # this gives the count, so the inclusive convention never has to be reasoned about.
@@ -1139,7 +1141,7 @@ class LivePlotWidget(QWidget):
                     rate_str = f"{time_per_iter_ms * 1000:.1f} µs/it"
                 else:
                     rate_str = f"{time_per_iter_ms:.1f} ms/it"
-                if finished:  # no ETA to give, and the requested count is in the tooltip
+                if finished:  # no ETA to give
                     fmt = f"{count_txt} | {elapsed_str} | {rate_str}"
                 else:
                     fmt = f"{count_txt} | {elapsed_str} < {remaining_str} | {rate_str}"
