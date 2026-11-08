@@ -85,6 +85,13 @@ To generate live plotting, the Runtime class must define:
 	  ```bash
 	  pip install -e  .
 	  ```
+	- **Linux and WSL** (Debian/Ubuntu): install the system packages the GUI needs, once:
+	  ```bash
+	  acadia_gui --install-system-deps   # asks for sudo once; does nothing if all are installed
+	  ```
+	  These are the libraries of Qt's `xcb` backend (the default on native Linux) and a cursor
+	  theme, without which only the plain arrow cursor shows (no busy, text or resize cursors;
+	  WSL images ship without one).
 
 - **Add the app to the application launcher**
 	- **Native Linux** (Ubuntu 22+): nothing to do — the launcher entry is installed
@@ -114,41 +121,55 @@ To generate live plotting, the Runtime class must define:
 
 ---
 
+## Smoke test
+`tests/gui_smoke_test.py` clicks through every button and feature of the browser once (folder tree,
+keys, progress row, menus, live plot, side panels, instrument loading, SeeQuence) and checks crash,
+exit and stall cases. It works in a temporary directory with a temporary HOME, so it never touches
+your settings or data, and needs no pytest:
+```
+python tests/gui_smoke_test.py                        # generated demo runs, no data needed
+python tests/gui_smoke_test.py --runs RUN RUN ...     # copies of real runs as well
+python tests/gui_smoke_test.py --only keys,plots      # some sections only
+```
+It runs offscreen by default; set `QT_QPA_PLATFORM` (e.g. `wayland`) to run it on a display. The
+exit code is 0 when every check passed.
+
+---
+
+## Version
+The version is in `setup.py`. A git hook bumps its last digit on every commit (not on `--amend`, and
+not when the commit changes the version by hand, e.g. to bump the first two digits). Enable it once
+per clone:
+```
+git config core.hooksPath .githooks
+```
+
+---
+
 ## Trouble shooting
 -  **Error loading 'xcb' Plugin**
 
-   > **Note:** On WSL the app now defaults to the **Wayland** backend, so this error
-   > should no longer occur out of the box. The fix below is only needed if Wayland is
-   > unavailable and you must fall back to `xcb` (e.g. you set `QT_QPA_PLATFORM=xcb`
-   > yourself, or run on a non-WSLg setup).
-
-   When running for the first time on WSL, a common error is:
+   On native Linux, or on WSL when falling back to `xcb` (the app uses the **Wayland**
+   backend on WSL by default), a missing system library gives:
     ```
 	qt.qpa.plugin: Could not load the Qt platform plugin "xcb" in "" even though it was found.
 	This application failed to start because no Qt platform plugin could be initialized. Reinstalling the application may fix this problem.
 	Available platform plugins are: eglfs, linuxfb, minimal, minimalegl, offscreen, vnc, wayland-egl, wayland, wayland-xcomposite-egl, wayland-xcomposite-glx, webgl, xcb.
 	```
 
-   This indicates that WSL is missing some necessary libraries to render Qt GUIs.
-
-   To fix this, **exist the virtual environment (if active) first with `deactivate`**
-
-   Then, install the required XCB-related libraries in the WSL terminal.
-    ```bash
-    sudo apt install libxcb-xinerama0
-    ```
-    
-   After installation, re-enter your virtual environment and try running the GUI again.
-
-   If this still doesn't work, try installing the full xcb related packages
+   Fix: run `acadia_gui --install-system-deps` (see *Installation*). If that is not possible,
+   install the packages by hand:
    ```bash
     sudo apt-get update
     sudo apt-get install -y \
       libxcb1 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 \
       libxcb-render-util0 libxcb-shape0 libxcb-shm0 libxcb-sync1 libxcb-util1 \
       libxcb-xfixes0 libxcb-xinerama0 libxcb-xkb1 libxkbcommon-x11-0 \
-      libgl1 libegl1
+      libgl1 libegl1 dmz-cursor-theme
    ```
+
+-  **No busy / text / resize cursor, only the arrow** (seen on WSL): no cursor theme is
+   installed. Run `acadia_gui --install-system-deps`, or `sudo apt-get install -y dmz-cursor-theme`.
   
 ---
 

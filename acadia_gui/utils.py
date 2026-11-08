@@ -48,6 +48,65 @@ def check_wsl_interop():
     return False
 
 
+# System packages the GUI needs on Debian/Ubuntu (native Linux and WSL):
+# - the xcb/GL libraries of Qt's xcb backend (the default on native Linux; on WSL the fallback),
+#   without which Qt fails with: Could not load the Qt platform plugin "xcb"
+# - a cursor theme: Qt takes every cursor shape (busy, text, resize) from one, and some
+#   installs (e.g. WSL images) have none, so only the plain arrow shows
+GUI_APT_PACKAGES = [
+    "libxcb1", "libxcb-icccm4", "libxcb-image0", "libxcb-keysyms1", "libxcb-randr0",
+    "libxcb-render-util0", "libxcb-shape0", "libxcb-shm0", "libxcb-sync1", "libxcb-util1",
+    "libxcb-xfixes0", "libxcb-xinerama0", "libxcb-xkb1", "libxkbcommon-x11-0",
+    "libgl1", "libegl1",
+    "dmz-cursor-theme",
+]
+
+
+def install_system_deps():
+    """apt install of the GUI_APT_PACKAGES that are missing (one sudo prompt).
+
+    Only on systems with apt-get; installs nothing and asks for nothing when all are present.
+    Non-fatal: if the install fails, prints the manual command. Returns True when all packages
+    are installed afterwards.
+    """
+    if not (sys.platform.startswith("linux") and shutil.which("apt-get") and shutil.which("dpkg-query")):
+        print("[skip] No apt-get on this system; install the Qt xcb libraries and a cursor theme "
+              "with its package manager if the GUI needs them.")
+        return False
+
+    def missing_packages():
+        missing = []
+        for pkg in GUI_APT_PACKAGES:
+            status = subprocess.run(["dpkg-query", "-W", "-f=${Status}", pkg],
+                                    capture_output=True, text=True).stdout
+            if "install ok installed" not in status:
+                missing.append(pkg)
+        return missing
+
+    missing = missing_packages()
+    if not missing:
+        print("[ok] GUI system packages already installed.")
+        return True
+
+    if not shutil.which("sudo"):
+        print("[warn] sudo not found. Install the missing GUI system packages with:\n"
+              "  sudo apt-get install -y " + " ".join(missing))
+        return False
+    print(f"Installing {len(missing)} GUI system packages (sudo may prompt): {' '.join(missing)}")
+    install_cmd = ["sudo", "apt-get", "install", "-y", *missing]
+    if subprocess.run(install_cmd).returncode != 0:
+        # apt lists are often stale on a fresh install; refresh once and retry
+        subprocess.run(["sudo", "apt-get", "update"])
+        subprocess.run(install_cmd)
+    missing = missing_packages()
+    if missing:
+        print("[warn] Could not install all GUI system packages. Run manually:\n"
+              "  sudo apt-get install -y " + " ".join(missing))
+        return False
+    print("[ok] Installed the GUI system packages.")
+    return True
+
+
 def set_wsl_display_backend():
     """On WSL, use the Wayland Qt backend instead of the default xcb/XWayland.
 

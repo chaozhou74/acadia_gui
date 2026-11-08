@@ -8,6 +8,7 @@ import subprocess
 import logging
 from pathlib import Path
 import ast
+import html
 
 import numpy as np
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg, NavigationToolbar2QT
@@ -19,7 +20,7 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QWidgetAction, QMenu, QAction, QApplication, QToolButton, QPushButton,
     QProgressBar, QLineEdit, QLabel, QComboBox, QGroupBox, QGridLayout, QCheckBox, QSizePolicy, QFrame, QSlider
 )
-from PyQt5.QtCore import QTimer, Qt, QSize
+from PyQt5.QtCore import QTimer, Qt, QSize, pyqtSignal
 from PyQt5 import QtCore, QtGui
 from PyQt5.QtGui import QImage, QPainter, QFont, QIcon, QFontMetrics
 
@@ -29,6 +30,7 @@ from acadia_qmsmt.utils.annotation import AXS_SHAPE_TAG, get_registered_methods,
 from acadia_qmsmt.utils.path_adapter import to_windows_path, detect_platform
 
 from acadia_gui.icons import get_icon, style_mpl_toolbar
+from acadia_gui.gui.iter_window import ITER_WINDOWABLE_ATTR, windowed_reshape
 
 
 # files used for rough estimate of progress rate, ETA, etc
@@ -37,6 +39,23 @@ CREATE_INDICATOR_FILE = "run.py" # file whose creation time indicates the experi
 STOP_INDICATOR_FILE = ".stop"
 
 TOTAL_ITER_ATTRIBUTE = "iterations" # runtime class attribute that defines the total number of iterations
+ITER_WINDOW_KWARG = "iter_window" # data-processor kwarg used to restrict processing to a range of iterations
+# shown in the window button's tooltip: how a runtime's data processor takes the window
+ITER_WINDOW_EXAMPLE = """# Option 1: the GUI windows reshape_iq_data_by_axes (axis 0).
+# Only if ALL per-iteration data in the processor comes from it.
+class MyRuntime(QMsmtRuntime):
+    iter_windowable = True
+
+# Option 2: the processor applies the window itself (also works in notebooks)
+@annotate_method(is_data_processor=True)
+def process_current_data(self, iter_window=None):
+    data = reshape_iq_data_by_axes(...)  # axis 0 = iterations
+    total = len(data)
+    if iter_window is not None:
+        i0, i1 = iter_window             # 0-based, inclusive
+        data = data[i0:i1 + 1]
+    ...                                  # process `data`
+    return total                         # always the TOTAL count"""
 
 logger = logging.getLogger(__name__)
 
@@ -202,7 +221,225 @@ def coalesce_calls(flag_name="_updating", pending_name="_pending_update", resche
     return deco
 
 
+class ThrottledCanvas(FigureCanvasQTAgg):
+    """
+    Canvas that renders at most once per `interval_ms` for redraw requests (`draw_idle`).
+
+    Opening a plot resizes the canvas several times while the input boxes settle, and the next
+    paint renders each resize's redraw request, so the plot was rendered 5-6 times per open.
+    Requests within `interval_ms` now give one render. `draw()` still renders right away.
+    """
+    def __init__(self, figure=None, interval_ms=50):
+        super().__init__(figure)
+        self._interval_ms = interval_ms
+        self._last_render = 0.0
+        self._idle_timer = QTimer(self)
+        self._idle_timer.setSingleShot(True)
+        self._idle_timer.timeout.connect(super().draw_idle)
+
+    def draw(self):
+        self._idle_timer.stop()     # this render serves the queued requests too
+        self._last_render = time.perf_counter()
+        super().draw()
+
+    def draw_idle(self):
+        # like matplotlib's own draw_idle, requests made during a render are dropped
+        if self._idle_timer.isActive() or getattr(self, "_is_drawing", False):
+            return
+        if QApplication.mouseButtons() != Qt.NoButton:     # pan, zoom, slider drags: full frame rate
+            super().draw_idle()
+            return
+        since_ms = (time.perf_counter() - self._last_render) * 1000
+        self._idle_timer.start(int(max(0, self._interval_ms - since_ms)))
+
+
+class IterationWindowBar(QProgressBar):
+    """Progress bar with an optional draggable iteration-selection window.
+
+    In window mode a translucent band with two handles is painted over the normal bar.
+    Handle positions are 0-based INCLUSIVE iteration indices ``(i0, i1)``: the window
+    selects ``i1 - i0 + 1`` iterations, which a runtime slices as ``data[i0:i1 + 1]``.
+    The band is drawn from ``i0`` to ``i1 + 1`` because iteration ``i`` occupies the
+    span ``[i, i + 1)`` of the bar.
+
+    The bar's own coordinate system stays ``0..maximum()`` -- the REQUESTED iteration
+    count -- so the band lines up with the fill, but the handles are clamped to the
+    iterations that actually exist (``available``). A run stopped at 496 of 1000 thus
+    shows a bar reading 496/1000 whose window cannot be dragged past iteration 495.
+
+    ``windowChanged`` fires on mouse RELEASE only. Reprocessing runs synchronously on
+    the GUI thread and takes seconds on large datasets, so it must never fire per mouse
+    move; ``windowMoving`` fires continuously for cheap updates (the text boxes).
+    """
+
+    windowChanged = QtCore.pyqtSignal(int, int)
+    windowMoving = QtCore.pyqtSignal(int, int)
+
+    GRAB_PX = 6  # how close the cursor must be to a handle to grab it
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._window_mode = False
+        self._available = 0
+        self._i0 = 0
+        self._i1 = 0
+        self._drag = None
+        self._drag_ref = None
+        self.setMouseTracking(True)
+
+    # ---- public API ------------------------------------------------------
+    def window_mode(self):
+        return self._window_mode
+
+    def set_window_mode(self, on: bool):
+        self._window_mode = bool(on)
+        if self._window_mode:  # (re)open on the full available range
+            self._i0, self._i1 = self._clamp(0, max(self._available - 1, 0))
+        self.unsetCursor()
+        self._drag = None
+        self.update()
+
+    def set_available(self, n: int):
+        """Tell the bar how many iterations actually exist.
+
+        Pin semantics: an active window keeps its absolute indices when new data
+        arrives and is only clamped if it would fall outside the data.
+        """
+        self._available = max(int(n), 0)
+        if self._window_mode:
+            self._i0, self._i1 = self._clamp(self._i0, self._i1)
+        else:  # track the full range so opening the window later spans everything
+            self._i0, self._i1 = 0, max(self._available - 1, 0)
+        self.update()
+
+    def available(self):
+        return self._available
+
+    def window(self):
+        """Current window as 0-based inclusive ``(i0, i1)``, or None if inactive."""
+        if not self._window_mode or self._available <= 0:
+            return None
+        return int(self._i0), int(self._i1)
+
+    def set_window(self, i0, i1, emit=False):
+        self._i0, self._i1 = self._clamp(i0, i1)
+        self.update()
+        if emit:
+            self.windowChanged.emit(self._i0, self._i1)
+
+    # ---- geometry --------------------------------------------------------
+    def _clamp(self, i0, i1):
+        top = max(self._available - 1, 0)
+        i0 = int(min(max(int(i0), 0), top))
+        i1 = int(min(max(int(i1), i0), top))
+        return i0, i1
+
+    def _bar_rect(self):
+        return self.rect().adjusted(1, 1, -1, -1)
+
+    def _xof(self, v):
+        r = self._bar_rect()
+        return r.left() + r.width() * (float(v) / max(self.maximum(), 1))
+
+    def _vof(self, x):
+        r = self._bar_rect()
+        if r.width() <= 0:
+            return 0.0
+        return (float(x) - r.left()) / r.width() * max(self.maximum(), 1)
+
+    # ---- mouse -----------------------------------------------------------
+    def _interactive(self):
+        return self._window_mode and self._available > 0
+
+    def mousePressEvent(self, event):
+        if not self._interactive() or event.button() != Qt.LeftButton:
+            return super().mousePressEvent(event)
+        x = event.pos().x()
+        x0, x1 = self._xof(self._i0), self._xof(self._i1 + 1)
+        if abs(x - x0) <= self.GRAB_PX:
+            self._drag = "lo"
+        elif abs(x - x1) <= self.GRAB_PX:
+            self._drag = "hi"
+        elif x0 < x < x1:
+            self._drag = "band"
+            self._drag_ref = (self._vof(x), self._i0, self._i1)
+        else:  # clicked outside the band: grab the nearer edge and jump it here
+            self._drag = "lo" if abs(x - x0) <= abs(x - x1) else "hi"
+            self._apply_drag(x)
+        self.setCursor(Qt.ClosedHandCursor if self._drag == "band" else Qt.SizeHorCursor)
+        self.update()
+        event.accept()
+
+    def mouseMoveEvent(self, event):
+        if not self._interactive():
+            return super().mouseMoveEvent(event)
+        if self._drag is None:  # hover feedback only
+            x = event.pos().x()
+            x0, x1 = self._xof(self._i0), self._xof(self._i1 + 1)
+            if abs(x - x0) <= self.GRAB_PX or abs(x - x1) <= self.GRAB_PX:
+                self.setCursor(Qt.SizeHorCursor)
+            elif x0 < x < x1:
+                self.setCursor(Qt.OpenHandCursor)
+            else:
+                self.unsetCursor()
+            return super().mouseMoveEvent(event)
+        self._apply_drag(event.pos().x())
+        self.update()
+        self.windowMoving.emit(self._i0, self._i1)
+        event.accept()
+
+    def mouseReleaseEvent(self, event):
+        if self._drag is None:
+            return super().mouseReleaseEvent(event)
+        self._drag = None
+        self.unsetCursor()
+        self.update()
+        # only now do we pay for reprocessing
+        self.windowChanged.emit(self._i0, self._i1)
+        event.accept()
+
+    def _apply_drag(self, x):
+        v = self._vof(x)
+        if self._drag == "lo":
+            i0, i1 = int(round(v)), self._i1
+        elif self._drag == "hi":
+            i0, i1 = self._i0, int(round(v)) - 1
+        else:  # move the whole window, preserving its width
+            v_ref, a, b = self._drag_ref
+            width = b - a
+            shift = int(round(v - v_ref))
+            i0 = min(max(a + shift, 0), max(self._available - 1 - width, 0))
+            i1 = i0 + width
+        self._i0, self._i1 = self._clamp(i0, i1)
+
+    # ---- painting --------------------------------------------------------
+    def paintEvent(self, event):
+        super().paintEvent(event)  # normal bar + its ETA text first
+        if not self._interactive():
+            return
+        painter = QPainter(self)
+        r = self._bar_rect()
+        x0, x1 = self._xof(self._i0), self._xof(self._i1 + 1)
+
+        # dim everything outside the window so the selection reads at a glance
+        shade = QtGui.QColor(0, 0, 0, 110)
+        if x0 > r.left():
+            painter.fillRect(QtCore.QRectF(r.left(), r.top(), x0 - r.left(), r.height()), shade)
+        if x1 < r.right():
+            painter.fillRect(QtCore.QRectF(x1, r.top(), r.right() - x1, r.height()), shade)
+
+        accent = self.palette().highlight().color()
+        painter.setPen(QtGui.QPen(accent, 1))
+        painter.drawRect(QtCore.QRectF(x0, r.top(), max(x1 - x0, 1), r.height() - 1))
+        for x in (x0, x1):
+            painter.fillRect(QtCore.QRectF(x - 1.5, r.top(), 3, r.height()), accent)
+        painter.end()
+
+
 class LivePlotWidget(QWidget):
+    # step of opening a data folder: "loading", "processing", "plotting"
+    open_step = pyqtSignal(str)
+
     def __init__(self, poll_interval_sec=2, update_indicator_file=UPDATE_INDICATOR_FILE,
                  create_indicator_file=CREATE_INDICATOR_FILE):
         """
@@ -238,6 +475,12 @@ class LivePlotWidget(QWidget):
         self._full_folder_path = ""
         self.plot_axes = None
         self.last_axs_shape = None
+        # tight_layout runs on every plot update (see make_plot); these track a resize after it
+        self._needs_layout = True
+        self._laid_out_size = None      # canvas size (px) the last tight_layout was done for
+        # metadata.txt time of the data start() just loaded, while that runtime is still unused:
+        # the first update processes it instead of reading the data a second time
+        self._fresh_load_mtime = None
 
         # -- default snapshot settings
         self.snapshot_original_dpi = 800 # high dpi
@@ -256,7 +499,7 @@ class LivePlotWidget(QWidget):
         self.checked_right_click_flags = defaultdict(set)  # (plot_name, ax_index) → set of flags
 
         # --- Matplotlib figure/canvas ---
-        self.canvas = FigureCanvasQTAgg(Figure())
+        self.canvas = ThrottledCanvas(Figure())
         self.canvas.figure.set_facecolor("none") # will be set later
         self.toolbar = NavigationToolbar2QT(self.canvas, self)
         self.toolbar.setObjectName("livePlotToolBar")  # tags for styling with css
@@ -267,6 +510,14 @@ class LivePlotWidget(QWidget):
         )
         self.canvas.setMinimumHeight(200)
         self.canvas.mpl_connect("button_press_event", self.handle_right_click)
+        # Axes positions are figure fractions fixed by the last tight_layout, so after the canvas
+        # changes size the title or tick labels can end up clipped; lay out again once a resize
+        # settles (a finished run gets no further updates that would do it).
+        self._relayout_timer = QTimer(self)
+        self._relayout_timer.setSingleShot(True)
+        self._relayout_timer.setInterval(120)
+        self._relayout_timer.timeout.connect(self._relayout_after_resize)
+        self.canvas.mpl_connect("resize_event", self._on_canvas_resize)
 
 
         # --- Plot selector ---
@@ -328,9 +579,32 @@ class LivePlotWidget(QWidget):
         kwargs_row.addWidget(self.update_buttons_box)
 
         # --- Progress bar ------------
-        self.progress_bar = QProgressBar()
+        self.progress_bar = IterationWindowBar()
         self.progress_bar.setMinimum(0)
         self.progress_bar.setFormat("0/0")
+        self.progress_bar.windowMoving.connect(self._on_window_moving)
+        self.progress_bar.windowChanged.connect(self._on_window_changed)
+
+        # --- Iteration-window controls ------------
+        # Only usable when the runtime's data processor accepts the `iter_window` kwarg;
+        # `start()` enables the toggle accordingly so an unsupported runtime is visibly
+        # unavailable rather than silently ignoring the window.
+        self.window_button = QToolButton()
+        self.window_button.setText("[ ]")
+        self.window_button.setCheckable(True)
+        self.window_button.setEnabled(False)
+        self.window_button.toggled.connect(self.toggle_iteration_window)
+
+        self.window_start_input = QLineEdit()
+        self.window_stop_input = QLineEdit()
+        for box, tip in ((self.window_start_input, "First iteration (0-based, inclusive)"),
+                         (self.window_stop_input, "Last iteration (0-based, inclusive)")):
+            box.setFixedWidth(60)
+            box.setAlignment(Qt.AlignCenter)
+            box.setToolTip(tip)
+            box.setVisible(False)
+            box.editingFinished.connect(self._on_window_text_edited)
+
         # ---- stop button ------------
         self.stop_button = QPushButton()
         self.stop_button.setText("STOP")
@@ -340,9 +614,19 @@ class LivePlotWidget(QWidget):
 
 
         progress_row = QHBoxLayout()
+        progress_row.addWidget(self.window_button)
+        progress_row.addWidget(self.window_start_input)
         progress_row.addWidget(self.progress_bar)
+        progress_row.addWidget(self.window_stop_input)
         progress_row.addWidget(self.stop_button)
         self.stop_button.setFixedHeight(self.progress_bar.sizeHint().height())
+        self.window_button.setFixedHeight(self.progress_bar.sizeHint().height())
+
+        # iteration-window state
+        self._supports_window = False
+        self._window_by_gui = False   # True: the GUI applies the window (runtime sets iter_windowable)
+        self._last_window = None      # window used for the last actual reprocess
+        self._last_available = 0      # iterations present at the last actual reprocess
 
         # --- Layout setup ---
         layout = QVBoxLayout(self)
@@ -355,8 +639,11 @@ class LivePlotWidget(QWidget):
         self.setLayout(layout)
 
         # --- Timer for update ---
+        # single shot, restarted when an update ends: the poll interval is the wait between the
+        # end of one update and the start of the next, so slow processing leaves the window time
         self.timer = QTimer()
-        self.timer.timeout.connect(self.update_plot)
+        self.timer.setSingleShot(True)
+        self.timer.timeout.connect(self._poll)
 
         # --- Autoscale cache ----
         self._ax_state_before_action = {}  # (plot_name, ax_index, label) -> state dict
@@ -382,12 +669,15 @@ class LivePlotWidget(QWidget):
             logger.debug(f"No customizer method found in {self.runtime_class.__name__}, skipped.")
 
     def start(self, data_path):
+        self.open_step.emit("loading")
         self.data_path = data_path
         self._full_folder_path = data_path
         self._update_folder_label()
         self.is_paused = False
         self.last_mtime = 0
         self.completed_iter = None
+        self._needs_layout = True
+        self._fresh_load_mtime = None
 
         # Load the saved acadia_qmsmt.py as the acadia_qmsmt.qmsmt submodule
         try:
@@ -399,7 +689,9 @@ class LivePlotWidget(QWidget):
                            f"Using the global version", exc_info=True)
             self.runtime_class = get_saved_runtime_class(data_path, use_saved_qmsmt=False)
 
+        loaded_mtime = self.get_latest_update_time()
         self._load_runtime()
+        self._fresh_load_mtime = loaded_mtime
 
         self.total_iter =  getattr(self.rt, TOTAL_ITER_ATTRIBUTE, None)
         if self.total_iter is None:
@@ -419,12 +711,30 @@ class LivePlotWidget(QWidget):
             logger.error(e, exc_info=True)
             self.data_processor_name = None
 
-        if hasattr(self.rt, self.data_processor_name):
+        # reset the iteration window before probing the new runtime
+        self._reset_iteration_window()
+
+        if self.data_processor_name and hasattr(self.rt, self.data_processor_name):
             processor_func = getattr(self.rt, self.data_processor_name)
             self.process_inputs = self.create_inputs_from_signature(processor_func, self.process_kwargs_layout,
                                                                     self.process_kwargs_box,
                                                                     update_callback=lambda: self.update_plot(force=True))
             self.update_buttons = self.create_update_buttons()
+
+            native = self._processor_supports_window(processor_func)
+            self._window_by_gui = not native and bool(getattr(self.rt, ITER_WINDOWABLE_ATTR, False))
+            self._supports_window = native or self._window_by_gui
+            self.window_button.setEnabled(self._supports_window)
+            if self._supports_window:
+                tip = ("Restrict processing to a range of iterations.<br>"
+                       "Drag either handle to resize, or the band itself to slide the window.<br>"
+                       "Reprocessing happens on mouse release. Update buttons turn the window off first.")
+            else:
+                tip = (f"Unavailable: <code>{self.runtime_class.__name__}.{self.data_processor_name}()</code> "
+                       f"does not accept an <code>{ITER_WINDOW_KWARG}</code> argument, and "
+                       f"<code>{self.runtime_class.__name__}</code> does not set "
+                       f"<code>{ITER_WINDOWABLE_ATTR} = True</code>.")
+            self._set_window_tooltip(tip)
 
         # Disable STOP button if .stop file already exists
         self.update_stop_button_state()
@@ -435,10 +745,18 @@ class LivePlotWidget(QWidget):
         self.select_plot(self.plot_selector.currentIndex())
         self.timer.start(self.poll_interval_ms)
 
+    def _poll(self):
+        try:
+            self.update_plot()
+        finally:
+            if self.ready:
+                self.timer.start(self.poll_interval_ms)
+
     def stop(self):
         self.timer.stop()
+        self._fresh_load_mtime = None
         self.canvas.figure.clf()
-        self.canvas.draw()
+        self.canvas.draw_idle()
         self.ready = False
         self.completed_iter = None
 
@@ -527,6 +845,7 @@ class LivePlotWidget(QWidget):
                                                                  update_callback=lambda: self.update_plot(force=True, reprocess_data=False))
         self.checked_right_click_flags.clear()
         self._ax_state_before_action.clear()
+        self._needs_layout = True
 
         # if we already have data, just redo plot
         if self.completed_iter is not None:
@@ -535,7 +854,7 @@ class LivePlotWidget(QWidget):
             except Exception as e:
                 self.canvas.figure.clf()
                 logger.error(f"Error in making plot '{method_name}', {e}", exc_info=True)
-            self.canvas.draw()
+            self.canvas.draw_idle()
         else: # if we don't have data yet, redo data processing, then plot
             self.update_plot(force=True)
 
@@ -566,21 +885,49 @@ class LivePlotWidget(QWidget):
 
         self.last_mtime = current_mtime
 
+        # A pinned window that already sits entirely inside processed data cannot change
+        # when new data arrives, and reprocessing is synchronous on the GUI thread. Skip
+        # the work on data-driven polls; an explicit `force` (drag, kwarg edit) still runs.
+        if not force and self._supports_window:
+            win = self.progress_bar.window()
+            if (win is not None and win == self._last_window
+                    and self._last_available >= win[1] + 1):
+                logger.debug("iteration window pinned inside processed data; skipping reprocess")
+                return
+
         if reprocess_data:
             try:
-                # reload the runtime with its data
-                try:
-                    self._load_runtime()
-                except Exception as e:
-                    logger.error(f"Failed to reload runtime: {e}", exc_info=True)
-                    return
+                if self._fresh_load_mtime is not None:
+                    self.open_step.emit("processing")
+                    # start() has just loaded the runtime and its data: process that rather than
+                    # read it again. Its time stands as the last update, so data written since
+                    # is picked up on the next poll.
+                    self.last_mtime, self._fresh_load_mtime = self._fresh_load_mtime, None
+                else:
+                    # reload the runtime with its data
+                    try:
+                        self._load_runtime()
+                    except Exception as e:
+                        logger.error(f"Failed to reload runtime: {e}", exc_info=True)
+                        return
 
                 completed_iter = None
                 if hasattr(self.rt, self.data_processor_name):
                     processor_func = getattr(self.rt, self.data_processor_name)
                     proc_kwargs = parse_inputs(self.process_inputs)
+                    active_window = self.progress_bar.window() if self._supports_window else None
                     try:
-                        completed_iter = processor_func(**proc_kwargs)
+                        if active_window is not None and self._window_by_gui:
+                            with windowed_reshape(active_window) as window_state:
+                                completed_iter = processor_func(**proc_kwargs)
+                            if window_state.called:
+                                completed_iter = window_state.total  # full count, never the window's
+                            else:  # reshapes by hand: the window had no effect, so don't offer it
+                                self._disable_gui_window()
+                        else:
+                            if active_window is not None:
+                                proc_kwargs[ITER_WINDOW_KWARG] = active_window
+                            completed_iter = processor_func(**proc_kwargs)
                         logger.debug(f"Processed data with completed_iter: {completed_iter} ")
                     except Exception as e:
                         logger.error(f"Error in data processing funciton "
@@ -595,8 +942,15 @@ class LivePlotWidget(QWidget):
                     return
 
                 if completed_iter is not None:
-                    self._update_progress_bar(completed_iter)
+                    # `completed_iter` is the TOTAL number of completed iterations, not the
+                    # windowed count -- a windowed count here would shrink the slider's own
+                    # range every time the window narrowed, which cannot be undone.
                     self.completed_iter = completed_iter
+                    self.progress_bar.set_available(int(completed_iter))
+                    self._last_available = int(completed_iter)
+                    self._last_window = self.progress_bar.window()
+                    self._sync_window_inputs()
+                    self._update_progress_bar(completed_iter)
                 else:
                     self.progress_bar.setValue(0)
                     self.progress_bar.setFormat(
@@ -615,8 +969,10 @@ class LivePlotWidget(QWidget):
             return
         if self.completed_iter is not None:
             try:
+                self.open_step.emit("plotting")
                 # Call plot into ax
-                axs = self.make_plot(self.canvas.figure, method_name, prepare_pcm=True, force_remake_axes=force)
+                axs = self.make_plot(self.canvas.figure, method_name, prepare_pcm=True,
+                                     force_remake_axes=force)
                 self.canvas.draw()
             except Exception as e:
                 logger.error(f"Error making plot '{method_name}': {e}", exc_info=True)
@@ -625,6 +981,9 @@ class LivePlotWidget(QWidget):
     def make_plot(self, figure: Figure, plot_method_name: str, prepare_pcm=False, force_remake_axes=False):
         """
         make the plot with plot_method_name in the given figure
+
+        The figure is laid out (`tight_layout`) every time: each update draws new titles, labels and
+        tick labels, which need room the previous layout did not leave.
         """
         # get plot function
         plot_method = getattr(self.rt, plot_method_name)
@@ -638,6 +997,7 @@ class LivePlotWidget(QWidget):
             figure.clf()
             self.plot_axes = figure.subplots(*self.current_plot_axs_shape)
             self.last_axs_shape = self.current_plot_axs_shape
+            self._needs_layout = True
 
         if self.current_plot_uses_axs is True:
             axs = self.plot_axes
@@ -646,6 +1006,7 @@ class LivePlotWidget(QWidget):
                 figure.clf()
                 self.plot_axes = figure.subplots(*self.current_plot_axs_shape)
                 self.last_axs_shape = self.current_plot_axs_shape
+                self._needs_layout = True
                 axs = self.plot_axes  # update `axs` too
             else:
                 for ax in flat_axes:
@@ -675,11 +1036,88 @@ class LivePlotWidget(QWidget):
                 if label in self.checked_right_click_flags[key]:
                     handler(ax)
         figure.tight_layout()
+        self._needs_layout = False
+        self._laid_out_size = self.canvas.get_width_height()
         return axs
 
+    def _on_canvas_resize(self, _event):
+        self._needs_layout = True
+        self._relayout_timer.start()        # restarts while a resize is still going on
+
+    def _relayout_after_resize(self):
+        figure = self.canvas.figure
+        if not figure.axes or self._laid_out_size == self.canvas.get_width_height():
+            return                          # nothing drawn yet, or already laid out at this size
+        try:
+            figure.tight_layout()
+        except Exception as e:
+            logger.debug(f"tight_layout after resize failed: {e}")
+            return
+        self._needs_layout = False
+        self._laid_out_size = self.canvas.get_width_height()
+        self.canvas.draw_idle()
+
+
+    def _run_finished(self, completed_iter):
+        """Whether acquisition is over, so the bar can total what actually ran.
+
+        Deliberately conservative -- while a run is still going we must keep showing the
+        requested count, or the bar would pin at 100% with a meaningless ETA. Being wrong
+        is cheap and self-correcting, since the maximum is recomputed on every pass.
+
+        No single on-disk marker covers every case: `.stop` is only written by this GUI's
+        STOP button, and the plot files only appear if `finalize()` ran. A run whose host
+        died mid-flight (as 021116 did) leaves neither, so staleness is the last resort --
+        scaled by the run's OWN mean iteration period, so that a legitimately slow runtime
+        (minutes per iteration) is never mistaken for a dead one.
+        """
+        if not self.data_path:
+            return False
+        try:
+            if (Path(self.data_path) / STOP_INDICATOR_FILE).exists():
+                return True
+            if self.total_iter is not None and completed_iter >= self.total_iter:
+                return True
+            last = self.get_latest_update_time()
+            if not last:
+                return False
+            elapsed = last - self.get_creation_time()
+            per_iter = elapsed / completed_iter if completed_iter > 0 and elapsed > 0 else 0.0
+            return (time.time() - last) > max(60.0, 5 * per_iter)
+        except Exception as e:
+            logger.debug(f"could not decide whether the run is finished: {e}")
+            return False
 
     def _update_progress_bar(self, completed_iter):
+        # A finished run normally keeps the requested `iterations` as its maximum, so a run
+        # stopped at 496 of 1000 shows a half-filled bar. Only while the iteration window is
+        # open is the bar rescaled to the iterations that actually ran (496/496, full bar),
+        # so the window can span the whole width of it.
+        finished = self._run_finished(completed_iter)
+        rescale = finished and completed_iter > 0 and self.progress_bar.window_mode()
+        if rescale:
+            denom = int(completed_iter)
+            self.progress_bar.setMaximum(denom)
+            if self.total_iter is not None and self.total_iter != denom:
+                self.progress_bar.setToolTip(
+                    f"Run ended after {denom} of {self.total_iter} requested iterations.")
+            else:
+                self.progress_bar.setToolTip("")
+        else:
+            denom = self.total_iter
+            self.progress_bar.setMaximum(self.total_iter if self.total_iter is not None else 1)
+            self.progress_bar.setToolTip("")
+
         self.progress_bar.setValue(int(completed_iter))
+
+        # A rescaled bar has no denominator worth showing -- the requested count moves to
+        # the tooltip, and the bar simply states how many iterations there are.
+        count_txt = f"{completed_iter} iterations" if rescale else f"{completed_iter}/{denom}"
+
+        # Spell the window out in the bar text: the two flanking boxes give the endpoints,
+        # this gives the count, so the inclusive convention never has to be reasoned about.
+        win = self.progress_bar.window()
+        win_txt = f" | win {win[0]}-{win[1]} ({win[1] - win[0] + 1} it)" if win else ""
 
         try:
             start_time = self.get_creation_time()
@@ -703,15 +1141,124 @@ class LivePlotWidget(QWidget):
                     rate_str = f"{time_per_iter_ms * 1000:.1f} µs/it"
                 else:
                     rate_str = f"{time_per_iter_ms:.1f} ms/it"
-                fmt = f"{completed_iter}/{self.total_iter} | {elapsed_str} < {remaining_str} | {rate_str}"
+                if finished:  # no ETA to give
+                    fmt = f"{count_txt} | {elapsed_str} | {rate_str}"
+                else:
+                    fmt = f"{count_txt} | {elapsed_str} < {remaining_str} | {rate_str}"
             else:
-                fmt = f"{completed_iter}/{self.total_iter} | waiting..."
+                fmt = f"{count_txt} | waiting..."
 
-            self.progress_bar.setFormat(fmt)
+            self.progress_bar.setFormat(fmt + win_txt)
 
         except Exception as e:
-            self.progress_bar.setFormat(f"{completed_iter}/{self.total_iter} | ETA error: {e}")
+            self.progress_bar.setFormat(f"{count_txt}{win_txt} | ETA error: {e}")
             logger.error(f"ETA error: {e}", exc_info=True)
+
+
+    # ----------- iteration window --------------------------------------
+    @staticmethod
+    def _processor_supports_window(func):
+        """Whether a data processor accepts the iteration-window kwarg.
+
+        Passing an unexpected kwarg would raise TypeError in every existing runtime, so
+        the window is only ever handed to processors that declare it (or take **kwargs).
+        """
+        try:
+            params = inspect.signature(func).parameters
+        except (TypeError, ValueError):
+            return False
+        if ITER_WINDOW_KWARG in params:
+            return True
+        return any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+    def _reset_iteration_window(self):
+        was_blocked = self.window_button.blockSignals(True)
+        self.window_button.setChecked(False)
+        self.window_button.blockSignals(was_blocked)
+        self.window_button.setEnabled(False)
+        self.window_button.setToolTip("")
+        self._style_window_button(False)
+        self.progress_bar.set_window_mode(False)
+        self.progress_bar.set_available(0)
+        self.window_start_input.setVisible(False)
+        self.window_stop_input.setVisible(False)
+        self._supports_window = False
+        self._window_by_gui = False
+        self._last_window = None
+        self._last_available = 0
+
+    def _style_window_button(self, checked):
+        # filled with the progress bar's own fill colour while the window is active
+        if checked:
+            pal = self.progress_bar.palette()
+            fill, text = pal.highlight().color().name(), pal.highlightedText().color().name()
+            self.window_button.setStyleSheet(
+                f"QToolButton {{ background-color: {fill}; color: {text}; "
+                f"border: 1px solid {fill}; border-radius: 2px; }}")
+        else:
+            self.window_button.setStyleSheet("")
+
+    def _set_window_tooltip(self, tip):
+        self.window_button.setToolTip(
+            f"<p style='white-space:pre'>{tip}</p>"
+            f"<p>How a runtime enables it:</p>"
+            f"<pre style='font-family:Consolas,\"DejaVu Sans Mono\",monospace'>{html.escape(ITER_WINDOW_EXAMPLE)}</pre>")
+
+    def _disable_gui_window(self):
+        name = self.runtime_class.__name__
+        logger.warning(f"{name} sets {ITER_WINDOWABLE_ATTR} = True, but {self.data_processor_name}() never called "
+                       f"reshape_iq_data_by_axes, so the iteration window cannot be applied; turning it off")
+        was_blocked = self.window_button.blockSignals(True)
+        self.window_button.setChecked(False)
+        self.window_button.blockSignals(was_blocked)
+        self._style_window_button(False)
+        self.progress_bar.set_window_mode(False)
+        self.window_start_input.setVisible(False)
+        self.window_stop_input.setVisible(False)
+        self.window_button.setEnabled(False)
+        self._supports_window = self._window_by_gui = False
+        self._set_window_tooltip(f"Unavailable: <code>{name}</code> sets <code>{ITER_WINDOWABLE_ATTR} = True</code>, but "
+                                 f"its processor reshapes its data without <code>reshape_iq_data_by_axes</code>.")
+
+    def toggle_iteration_window(self, checked):
+        self._style_window_button(checked)
+        self.progress_bar.set_window_mode(checked)
+        self.window_start_input.setVisible(checked)
+        self.window_stop_input.setVisible(checked)
+        self._sync_window_inputs()
+        self._last_window = None  # make sure the next pass actually reprocesses
+        self.update_plot(force=True)
+
+    def _sync_window_inputs(self):
+        win = self.progress_bar.window()
+        if win is None:
+            return
+        self.window_start_input.setText(str(win[0]))
+        self.window_stop_input.setText(str(win[1]))
+
+    def _on_window_moving(self, i0, i1):
+        # cheap: text only, no reprocessing while the mouse is down
+        self.window_start_input.setText(str(i0))
+        self.window_stop_input.setText(str(i1))
+
+    def _on_window_changed(self, i0, i1):
+        self._sync_window_inputs()
+        self.update_plot(force=True)
+
+    def _on_window_text_edited(self):
+        if not self.progress_bar.window_mode():
+            return
+        try:
+            i0 = int(float(self.window_start_input.text()))
+            i1 = int(float(self.window_stop_input.text()))
+        except ValueError:
+            self._sync_window_inputs()  # bad input: snap back to the real window
+            return
+        if (i0, i1) == self.progress_bar.window():
+            return
+        self.progress_bar.set_window(i0, i1)
+        self._sync_window_inputs()
+        self.update_plot(force=True)
 
 
     # ----------- kwarg inputs ------------------------------------------
@@ -798,7 +1345,8 @@ class LivePlotWidget(QWidget):
         max_items_per_row = 4
 
         for name, param in sig.parameters.items():
-            if name in {"self", "axs", "fig"}:
+            # `iter_window` is driven by the progress-bar window, not by a text box
+            if name in {"self", "axs", "fig", ITER_WINDOW_KWARG}:
                 continue
 
             default = param.default if param.default is not inspect.Parameter.empty else ""
@@ -1016,13 +1564,16 @@ class LivePlotWidget(QWidget):
         Reconnect the buttons to the bound methods of the updated runtime instance.
         """
         for button_name, method_name in self.update_button_registary.items():
-            update_method = getattr(self.rt, method_name)
             button, input_widgets = self.update_buttons[button_name]
 
-            def _update_method_try(checked=False, update_method=update_method, input_widgets=input_widgets):
+            def _update_method_try(checked=False, method_name=method_name, input_widgets=input_widgets):
                 try:
+                    if self.progress_bar.window() is not None:
+                        # an update must use the fit from ALL the data, never a windowed one
+                        logger.info(f"Turning the iteration window off before `{method_name}`")
+                        self.window_button.setChecked(False)  # reprocesses on all iterations
                     kwargs = parse_inputs(input_widgets)
-                    update_method(**kwargs)
+                    getattr(self.rt, method_name)(**kwargs)  # self.rt is reloaded on every reprocess
                 except Exception as e:
                     logger.error(e, exc_info=True)
 
@@ -1047,7 +1598,9 @@ class LivePlotWidget(QWidget):
             return  # shouldn't happen
 
         key = (plot_name, ax_index)
-        menu = QMenu()
+        # Parented to the window: on Wayland a menu without a parent is attached to whichever
+        # window had focus last, and opens in the wrong place after a focus change.
+        menu = QMenu(self.window())
 
         for label, is_checkable, handler in self.right_click_actions:
             action = QAction(label, self)
@@ -1077,7 +1630,10 @@ class LivePlotWidget(QWidget):
 
             menu.addAction(action)
 
-        menu.exec_(QtGui.QCursor.pos())
+        gui_event = getattr(event, "guiEvent", None)        # at the click itself
+        menu.exec_(self.canvas.mapToGlobal(gui_event.pos()) if gui_event is not None
+                   else QtGui.QCursor.pos())
+        menu.deleteLater()      # the window owns it now
 
     def autoscale_ax(self, ax):
         # Autoscale line/plot data
@@ -1403,6 +1959,7 @@ class LivePlotWidget(QWidget):
         # Progress bar reset
         self.progress_bar.setValue(0)
         self.progress_bar.setFormat("0/0")
+        self._reset_iteration_window()
 
         # STOP button reset
         self.stop_button.setEnabled(True)
@@ -1426,6 +1983,8 @@ class LivePlotWidget(QWidget):
         self.is_paused = False
         self.pause_button.setIcon(self._pause_icon)
         self.last_mtime = 0
+        self._needs_layout = True
+        self._fresh_load_mtime = None
 
         self.canvas.figure.clf()
         self.canvas.draw()

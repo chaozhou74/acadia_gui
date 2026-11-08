@@ -86,9 +86,23 @@ class FigureDisplayWidget(QWidget):
         self.setLayout(main_layout)
 
         self.png_paths = []
+        self._pixmaps = {}      # path -> decoded image, for the folder on show
         self.folder_path = None
         self.load_pickle_button.setEnabled(False)
         self.switch_to_live_button.setEnabled(False)
+        self.setFocusPolicy(Qt.ClickFocus)     # a click on the plot or image takes the keys
+
+    def keyPressEvent(self, event):
+        # Up / Down step through the plots (or images) while the plot area has the keyboard focus;
+        # in the folder tree the same keys move between folders
+        step = {Qt.Key_Up: -1, Qt.Key_Down: 1}.get(event.key())
+        if step is None or not self.hasFocus():
+            super().keyPressEvent(event)
+            return
+        selector = self.figure_selector if self.stack.currentWidget() is self.png_view else self.live_plot.plot_selector
+        index = selector.currentIndex() + step
+        if 0 <= index < selector.count():
+            selector.setCurrentIndex(index)
 
     def load_images(self, folder_path, is_data_folder=True):
         """Display the images found in ``folder_path``.
@@ -100,9 +114,8 @@ class FigureDisplayWidget(QWidget):
             whatever pictures they contain.
         """
         self.folder_path = folder_path
-        image_files = [f for f in os.listdir(folder_path)
-                       if f.lower().endswith(IMAGE_EXTENSIONS)]
-        self.png_paths = sorted(os.path.join(folder_path, f) for f in image_files)
+        self.png_paths = self._image_paths(folder_path)
+        self._pixmaps = {}      # each click re-reads the folder's pictures, once
         self.figure_selector.clear()
 
         if self.png_paths:
@@ -118,6 +131,19 @@ class FigureDisplayWidget(QWidget):
             self.plot_live_mode()
         else:
             self.image_label.setText("No images to display")
+
+    @staticmethod
+    def _image_paths(folder_path):
+        return sorted(os.path.join(folder_path, f) for f in os.listdir(folder_path)
+                      if f.lower().endswith(IMAGE_EXTENSIONS))
+
+    def will_process(self, folder_path, is_data_folder=True):
+        """Whether ``load_images`` would open the live plot, which processes the run's data: a
+        data folder without pictures."""
+        try:
+            return is_data_folder and not self._image_paths(folder_path)
+        except OSError:
+            return False
 
     def plot_live_mode(self):
         if self.folder_path:
@@ -135,7 +161,11 @@ class FigureDisplayWidget(QWidget):
     def show_selected_image(self, index):
         if index < 0 or index >= len(self.png_paths):
             return
-        pixmap = QPixmap(self.png_paths[index])
+        # decode each picture once per folder load; a resize only rescales the decoded image
+        path = self.png_paths[index]
+        pixmap = self._pixmaps.get(path)
+        if pixmap is None:
+            pixmap = self._pixmaps[path] = QPixmap(path)
         if pixmap.isNull():
             self.image_label.setText("Failed to load image")
         else:
@@ -184,6 +214,7 @@ class FigureDisplayWidget(QWidget):
 
     def clear(self):
         self.figure_selector.clear()
+        self._pixmaps = {}
         self.image_label.clear()
         self.image_label.setText("Not a data folder (missing run.py)")
         self.load_pickle_button.setEnabled(False)

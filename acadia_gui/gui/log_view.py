@@ -16,8 +16,19 @@ logger = logging.getLogger(__name__)
 log_files = ["remote_main.log", "runtime.log", "remote_stderr.log", "remote_stdout.log"]
 
 def find_log_files(path):
-    logs = [f for f in log_files if f in os.listdir(path)]
-    return logs
+    """Known log files present in `path` (one directory listing; [] if the folder is gone)."""
+    try:
+        present = set(os.listdir(path))
+    except OSError:
+        return []
+    return [f for f in log_files if f in present]
+
+
+def _mtime(path):
+    try:
+        return os.path.getmtime(path)
+    except OSError:
+        return None
 
 
 class LogViewer(QTabWidget):
@@ -25,6 +36,7 @@ class LogViewer(QTabWidget):
         super().__init__()
         self.folder_path = None
         self.file_mtimes = {}
+        self.log_files = []
         self.timer = QTimer()
         self.timer.timeout.connect(self.check_for_updates)
         self.timer.start(1000)  # Check every 1 second
@@ -59,7 +71,7 @@ class LogViewer(QTabWidget):
         except Exception as e:
             browser.setPlainText(f"Error reading {fname}:\n{e}")
             logger.error(e, exc_info=True)
-        self.file_mtimes[fname] = os.path.getmtime(full_path)
+        self.file_mtimes[fname] = _mtime(full_path)
         self.addTab(browser, fname)
 
     def _insert_with_formatting(self, browser, lines):
@@ -152,34 +164,49 @@ class LogViewer(QTabWidget):
             browser.setPlainText(f"Error reading {fname}:\n{e}")
             logger.error(e, exc_info=True)
 
-        self.file_mtimes[fname] = os.path.getmtime(full_path)
+        self.file_mtimes[fname] = _mtime(full_path)
 
     def check_for_updates(self):
+        # Runs from a QTimer: it must never raise (an exception escaping a Qt slot aborts the app),
+        # e.g. when the viewed folder was trashed or deleted.
         if not self.folder_path:
+            return
+        if not os.path.isdir(self.folder_path):
+            self.timer.stop()        # folder is gone: stop polling quietly
             return
 
         # check if there is any new log files and add them
         logs = set(find_log_files(self.folder_path))
-        for log in logs - set(self.log_files):
-                self.log_files.append(log)
-                self._add_log_tab(log)
+        new_logs = logs - set(self.log_files)
+        if new_logs and not self.log_files and self.count() == 1 and self.tabText(0) == "Logs":
+            self._remove_tab(0)      # drop the "No log files found." placeholder
+        for log in sorted(new_logs):
+            self.log_files.append(log)
+            self._add_log_tab(log)
 
         # update the content of the existing ones
         for i in range(self.count()):
             fname = self.tabText(i)
-            full_path = os.path.join(self.folder_path, fname)
-            try:
-                current_mtime = os.path.getmtime(full_path)
-                if fname not in self.file_mtimes or self.file_mtimes[fname] != current_mtime:
-                    self.file_mtimes[fname] = current_mtime
-                    self.reload_tab(i)
-            except FileNotFoundError:
+            if fname not in self.log_files:
                 continue
+            current_mtime = _mtime(os.path.join(self.folder_path, fname))
+            if current_mtime is not None and self.file_mtimes.get(fname) != current_mtime:
+                self.file_mtimes[fname] = current_mtime
+                self.reload_tab(i)
+
+    def _remove_tab(self, index):
+        widget = self.widget(index)
+        if widget:
+            widget.deleteLater()
+        self.removeTab(index)
 
     def clear(self):
+        # Forget the folder too: otherwise the 1 s timer kept polling the previously viewed folder
+        # after the panel was cleared, and crashed the app once that folder was trashed/deleted.
+        self.timer.stop()
+        self.folder_path = None
+        self.file_mtimes = {}
+        self.log_files = []
         while self.count():
-            widget = self.widget(0)
-            if widget:
-                widget.deleteLater()
-            self.removeTab(0)
+            self._remove_tab(0)
 
